@@ -9,15 +9,15 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <regex.h>
+#include <unistd.h>
 
 
 struct request_header {
     char method[10];
     char uri[1024];
     char http_version[32];
-    char host[256];
-    char connection[64];
-    char user_agent[1024];
+    char headers[100][2][1024];
+    int headers_len;
 };
 
 struct response_header {
@@ -158,93 +158,96 @@ void * get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [],
 
 }
 
-void * parse_header_request(struct request_header * header_request, const char * header_recv);
 
-void * parse_header_request(struct request_header * header_request, const char * header_recv)
+
+int split_str_by_ch(const char *str_ori, int str_ori_len, char ch_split, char str_tgt[][1024], int ch_num);
+// 字符串分割成数组
+// 例如：　10.10.10.10, 10.10.10.2 分割为["10.10.10.10", "10.10.10.2"]
+// 返回生成的数组长度
+int split_str_by_ch(const char *str_ori, int str_ori_len, char ch_split, char str_tgt[][1024], int ch_num)
 {
-    unsigned long index;
-    int flag_method = 0, flag_uri = 0, flag_httpversion = 0;
-    int myindex = 0, index_temp = 0;
-    bool flag_start = true;
-    char key_temp[64];
+    int str_ori_ch_index;
+    int str_index, ch_pos;
+    bool flag = false;
 
-    regex_t re;
-    regmatch_t subs[128];
-    char matched[512];
-    char errbuf[512];
-
-
-
-
-
-
-
-    for (index = 0; index < strlen(header_recv); index++)
+    for (str_ori_ch_index = 0, str_index = 0, ch_pos = 0; str_ori_ch_index < str_ori_len; str_ori_ch_index++)
     {
-        if (myindex <= 2)
+        if (str_index >= ch_num)
         {
-            if (myindex == 0)
-            {
-                if (! isspace(header_recv[index]) )
-                {
-                    header_request->method[index_temp] = header_recv[index];
-                    index_temp++;
-                }
-                else
-                {
-                    header_request->method[index_temp] = '\0';
-                    index_temp = 0;
-                    myindex++;
-                    flag_start = false;
-                }
-            }
-            else if (myindex == 1)
-            {
-                if (! isspace(header_recv[index]) )
-                {
-                    header_request->uri[index_temp] = header_recv[index];
-                    flag_start = true;
-                    index_temp++;
-                }
-                else
-                {
-                    if (flag_start)
-                    {
-                        header_request->uri[index_temp] = '\0';
-                        index_temp = 0;
-                        myindex++;
-                        flag_start = false;
-                    }
-                }
-            }
-            else if (myindex == 2)
-            {
-                if (! isspace(header_recv[index]) )
-                {
-                    header_request->http_version[index_temp] = header_recv[index];
-                    flag_start = true;
-                    index_temp++;
-                }
-                else
-                {
-                    if (flag_start)
-                    {
-                        header_request->http_version[index_temp] = '\0';
-                        index_temp = 0;
-                        myindex++;
-                    }
-                }
-            }
+            str_index = ch_num;
+            return str_index;
         }
 
+        if (str_ori[str_ori_ch_index] == ch_split)
+        {
+            str_tgt[str_index][ch_pos] = '\0';
+            str_index++;
+            ch_pos = 0;
+            flag = true;
+        }
+        else
+        {
+            // 刚分割的第一个字符是空格的，忽略
+            if (flag)
+                if (isblank(str_ori[str_ori_ch_index]) )
+                    continue;
+            str_tgt[str_index][ch_pos] = str_ori[str_ori_ch_index];
+            ch_pos++;
+            flag = false;
+        }
+    }
+    str_tgt[str_index][ch_pos] = '\0';
+    str_index++;
+
+    return str_index;
+}
 
 
+void parse_header_request(char * headers_recv, struct request_header * headers_request);
+void parse_header_request(char * headers_recv, struct request_header * headers_request)
+{
+    char line_char_s[4][1024];
+    char line_read[1024];
+    int index, temp_index, char_s_count, header_index;
+    bool flag = true;
+
+    for (index = 0, temp_index = 0, header_index = 0; index < strlen(headers_recv); index++)
+    {
+        if (headers_recv[index] == '\n')
+        {
+            line_read[temp_index] = '\0';
+
+            if (flag)
+            {
+                char_s_count = split_str_by_ch(line_read, strlen(line_read), ' ', line_char_s, 4);
+                if (char_s_count == 3)
+                {
+                    strcpy(headers_request->method, line_char_s[0]);
+                    strcpy(headers_request->uri, line_char_s[1]);
+                    strcpy(headers_request->http_version, line_char_s[2]);
+                    flag = false;
+                }
+            } else
+            {
+                char_s_count = split_str_by_ch(line_read, strlen(line_read), ':', line_char_s, 4);
+                if (char_s_count == 2)
+                {
+                    strcpy(headers_request->headers[header_index][0], line_char_s[0]);
+                    strcpy(headers_request->headers[header_index][1], line_char_s[1]);
+                    header_index++;
+                }
+            }
+
+            temp_index = 0;
+        }
+        else
+        {
+            line_read[temp_index] = headers_recv[index];
+            temp_index++;
+        }
     }
 
-    printf("### method: %s\n", header_request->method);
-    printf("### uri: %s\n", header_request->uri);
-    printf("### http_version: %s\n", header_request->http_version);
-
+    headers_request->headers_len = header_index;
 
 }
 
@@ -275,14 +278,14 @@ int main() {
     char response[4096];
     char ch_temp[1024];
     const int mimebook_len = 103;
-    char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
+    char * doc_root = "/home/liushan/mylab/clab/dagama/webroot";
     struct stat statbuf;
     char request_file[512];
 
 
-    char mime_file[FILE_PATH_MAX_LENTH] = "/home/liushan/mylab/clang/dagama/mime.types";
-    char * request_file_404 = "/home/liushan/mylab/clang/dagama/webroot/html/404.html";
-    char * request_file_403 = "/home/liushan/mylab/clang/dagama/webroot/html/403.html";
+    char mime_file[FILE_PATH_MAX_LENTH] = "/home/liushan/mylab/clab/dagama/mime.types";
+    char * request_file_404 = "/home/liushan/mylab/clab/dagama/webroot/html/404.html";
+    char * request_file_403 = "/home/liushan/mylab/clab/dagama/webroot/html/403.html";
 
     struct mimedict mimebook[mimebook_len];
     get_mimebook(mime_file, mimebook, mimebook_len);
@@ -327,7 +330,8 @@ int main() {
         printf("received:\n");
         printf("%s", read_buffer);
 
-        parse_header_request(&header_request, read_buffer);
+        // parse_header_request(&header_request, read_buffer);
+        parse_header_request(read_buffer, &header_request);
 
         sprintf(request_file, "%s/%s", doc_root, header_request.uri);
 
