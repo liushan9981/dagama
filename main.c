@@ -12,6 +12,17 @@
 #include <unistd.h>
 
 
+
+#define SET_RESPONSE_STATUS_200(header_resonse)  header_resonse.status = 200; strcpy(header_resonse.status_desc, "OK")
+#define SET_RESPONSE_STATUS_403(header_resonse)  header_resonse.status = 403; strcpy(header_resonse.status_desc, "forbidden")
+#define SET_RESPONSE_STATUS_404(header_resonse)  header_resonse.status = 404; strcpy(header_resonse.status_desc, "file not found");
+#define SET_RESPONSE_STATUS_405(header_resonse)  header_resonse.status = 405; strcpy(header_resonse.status_desc, "method not allowed");
+
+
+#define FILE_PATH_MAX_LENTH 256
+#define EXTENSION_NAME_LENTH 8
+
+
 struct request_header {
     char method[10];
     char uri[1024];
@@ -30,8 +41,6 @@ struct response_header {
     char status_desc[64];
 };
 
-#define FILE_PATH_MAX_LENTH 256
-#define EXTENSION_NAME_LENTH 8
 
 struct mimedict {
     char extension[8];
@@ -278,14 +287,23 @@ int main() {
     char response[4096];
     char ch_temp[1024];
     const int mimebook_len = 103;
-    char * doc_root = "/home/liushan/mylab/clab/dagama/webroot";
+    char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
     struct stat statbuf;
     char request_file[512];
 
+    char * file_index[2] = {"index.html", "index.htm"};
+    char * method_allow[3] = {"GET", "DELETE", "POST"};
+    int index_temp;
+    bool flag_temp;
 
-    char mime_file[FILE_PATH_MAX_LENTH] = "/home/liushan/mylab/clab/dagama/mime.types";
-    char * request_file_404 = "/home/liushan/mylab/clab/dagama/webroot/html/404.html";
-    char * request_file_403 = "/home/liushan/mylab/clab/dagama/webroot/html/403.html";
+    printf("------------------\n");
+    printf("this is:%s\n", file_index[0]);
+    printf("this is:%s\n", file_index[1]);
+    printf("------------------\n");
+    char mime_file[FILE_PATH_MAX_LENTH] = "/home/liushan/mylab/clang/dagama/mime.types";
+    char * request_file_404 = "/home/liushan/mylab/clang/dagama/webroot/html/404.html";
+    char * request_file_403 = "/home/liushan/mylab/clang/dagama/webroot/html/403.html";
+    char * request_file_405 = "/home/liushan/mylab/clang/dagama/webroot/html/405.html";
 
     struct mimedict mimebook[mimebook_len];
     get_mimebook(mime_file, mimebook, mimebook_len);
@@ -327,60 +345,115 @@ int main() {
         read_buffer[len] = '\0';
 
         // 打印调试信息
-        printf("received:\n");
-        printf("%s", read_buffer);
+//        printf("received:\n");
+//        printf("%s", read_buffer);
 
-        // parse_header_request(&header_request, read_buffer);
         parse_header_request(read_buffer, &header_request);
 
-        sprintf(request_file, "%s/%s", doc_root, header_request.uri);
+        printf("request_uri: %s\n", header_request.uri);
 
-        // 根据文件是否存在，重新拼接请求文件，生成状态码
-        // 文件存在
-        if (access(request_file, F_OK) != -1)
+
+        flag_temp = false;
+        for (index_temp = 0; index_temp < 3; index_temp++)
         {
-            // 打开文件失败，则403
-            if ( (fd_request_file = fopen(request_file, "rb") ) == NULL)
+            if (strcmp(method_allow[index_temp], header_request.method) == 0)
+                flag_temp = true;
+        }
+
+        if (! flag_temp)
+        {
+            SET_RESPONSE_STATUS_405(header_resonse);
+            strcpy(request_file, request_file_405);
+        }
+        else if (strcmp(header_request.method, "GET") == 0)
+        {
+            // 访问的uri是目录的，重写到该目录下的index文件
+            if (header_request.uri[strlen(header_request.uri) - 1] == '/')
             {
-                // printf("open file %s failed\n", request_file);
-                header_resonse.status = 403;
-                strcpy(header_resonse.status_desc, "forbidden");
-                strcpy(request_file, request_file_403);
+                sprintf(request_file, "%s/%s%s", doc_root, header_request.uri, file_index[0]);
+                if (access(request_file, F_OK) == -1)
+                {
+                    sprintf(request_file, "%s/%s%s", doc_root, header_request.uri, file_index[1]);
+                    if (access(request_file, F_OK) == -1)
+                    {
+                        SET_RESPONSE_STATUS_403(header_resonse);
+                        strcpy(request_file, request_file_403);
+                    }
+                    else
+                        SET_RESPONSE_STATUS_200(header_resonse);
+                }
+                else
+                    SET_RESPONSE_STATUS_200(header_resonse);
             }
-            // 打开文件正常，则200
             else
             {
-                header_resonse.status = 200;
-                strcpy(header_resonse.status_desc, "OK");
+                sprintf(request_file, "%s/%s", doc_root, header_request.uri);
+
+                printf("request_file: %s\n", request_file);
+                // 根据文件是否存在，重新拼接请求文件，生成状态码
+                // 文件存在
+                if (access(request_file, F_OK) != -1)
+                {
+                    // 获取文件信息，如果失败则403
+                    if (stat(request_file, &statbuf) != -1)
+                    {
+                        // 如果为普通文件
+                        if (S_ISREG(statbuf.st_mode) )
+                        {
+                            SET_RESPONSE_STATUS_200(header_resonse);
+                        }
+                        else
+                        {
+                            SET_RESPONSE_STATUS_404(header_resonse);
+                            strcpy(request_file, request_file_404);
+                        }
+                    }
+                    else
+                    {
+                        printf("get file %s stat error\n", request_file);
+                        SET_RESPONSE_STATUS_403(header_resonse);
+                        strcpy(request_file, request_file_403);
+                    }
+
+                }
+                // 文件不存在,则404
+                else
+                {
+                    SET_RESPONSE_STATUS_404(header_resonse);
+                    strcpy(request_file, request_file_404);
+                }
+
+                printf("request_file: %s\n", request_file);
+
             }
+
+
+
         }
-        // 文件不存在,则404
-        else
+        else if (strcmp(header_request.method, "POST") == 0)
         {
-            header_resonse.status = 404;
-            strcpy(header_resonse.status_desc, "file not found");
-            strcpy(request_file, request_file_404);
+            printf("POST is not finished yet!\n");
         }
 
-        // 不是200状态的，之前打开文件失败，现在打开错误页面文件
-        if (header_resonse.status != 200)
-        {
-            if ((fd_request_file = fopen(request_file, "rb")) == NULL)
-            {
-                fprintf(stderr, "open file %s error!\n", request_file);
-                exit(EXIT_FAILURE);
-            }
-        }
 
-        // 获取文件大小
-        if (stat(request_file, &statbuf) < 0)
-        {
-            printf("get file %s stat error\n", request_file);
-            exit(EXIT_FAILURE);
-        } else
-        {
+
+        if (stat(request_file, &statbuf) != -1)
             header_resonse.content_length = statbuf.st_size;
+        else
+            continue;
+
+
+
+        if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
+        {
+            fprintf(stderr, "open file %s error!\n", request_file);
+            // exit(EXIT_FAILURE);
+            SET_RESPONSE_STATUS_403(header_resonse);
+            strcpy(request_file, request_file_403);
+            if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
+                continue;
         }
+
 
 
         get_contenttype_by_filepath(request_file, mimebook, mimebook_len, &header_resonse);
