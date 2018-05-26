@@ -10,6 +10,7 @@
 #include <ctype.h>
 #include <regex.h>
 #include <unistd.h>
+#include <arpa/inet.h>
 
 
 
@@ -267,9 +268,10 @@ int main() {
     int fd_server_sock;
     FILE * fd_request_file;
     FILE * fd_write_file;
-    struct sockaddr_in server_sockaddr;
+    struct sockaddr_in server_sockaddr, client_sockaddr;
     const int myqueue = 100;
-    int conn, len;
+    int conn, len, cli_len;
+    char cli_addr_buff[INET_ADDRSTRLEN];
     ssize_t buffer_size = 4096, read_buffer_size;
     char read_buffer[buffer_size], send_buffer[buffer_size];
     struct response_header header_resonse = {
@@ -333,7 +335,8 @@ int main() {
 
     while(1)
     {
-        if ( (conn = accept(fd_server_sock, (struct sockaddr *) NULL, NULL)) < 0)
+        cli_len = sizeof(client_sockaddr);
+        if ( (conn = accept(fd_server_sock, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
         {
             printf("connect error!\n");
             exit(EXIT_FAILURE);
@@ -472,6 +475,10 @@ int main() {
 
 
         printf("response header:\n%s", response);
+
+        printf("Connection from client: %s:%d\n",
+               inet_ntop(AF_INET, &(client_sockaddr.sin_addr), cli_addr_buff, INET_ADDRSTRLEN),
+               ntohs(client_sockaddr.sin_port) );
 
         // 发送响应头信息
         write(conn, response, strlen(response));
