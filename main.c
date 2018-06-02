@@ -12,6 +12,9 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <limits.h>
+#include <errno.h>
+
+#include "mysignal.h"
 
 
 
@@ -562,14 +565,23 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
+    // 处理子进程，以防变成僵死进程
+    signal(SIGCHLD, sig_chld);
 
     while(1)
     {
         cli_len = sizeof(client_sockaddr);
         if ( (connection_fd = accept(fd_server_sock, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
         {
-            printf("connect error!\n");
-            exit(EXIT_FAILURE);
+            // 处理被中断的系统调用accept
+            if (errno == EINTR)
+                continue;
+            else
+            {
+                printf("accept error!\n");
+                exit(EXIT_FAILURE);
+            }
+
         }
 
         if ( (pid = fork() ) < 0)
