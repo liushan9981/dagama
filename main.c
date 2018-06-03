@@ -573,8 +573,14 @@ int main() {
         cli_len = sizeof(client_sockaddr);
         if ( (connection_fd = accept(fd_server_sock, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
         {
-            // 处理被中断的系统调用accept
+            // 重启被中断的系统调用accept
             if (errno == EINTR)
+                continue;
+            // accept返回前连接终止, SVR4实现
+            else if (errno == EPROTO)
+                continue;
+            // accept返回前连接终止, POSIX实现
+            else if (errno == ECONNABORTED)
                 continue;
             else
             {

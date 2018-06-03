@@ -36,8 +36,9 @@ void sig_chld(int signo)
     pid_t pid;
     int stat;
 
-    pid = wait(&stat);
-    printf("child %d terminated\n", pid);
+    // 改用waitpid，避免并发留下的僵死进程
+    while ( (pid = waitpid(-1, &stat, WNOHANG) ) > 0)
+        printf("child %d terminated\n", pid);
     return;
 }
 
