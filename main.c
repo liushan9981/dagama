@@ -15,7 +15,10 @@
 #include <errno.h>
 
 #include "mysignal.h"
-
+#include "fastcgi.h"
+#include "tool.h"
+#include "process_request.h"
+#include "writen_readn_readline.h"
 
 
 #define SET_RESPONSE_STATUS_200(header_resonse)  header_resonse.status = 200; strcpy(header_resonse.status_desc, "OK")
@@ -285,8 +288,8 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
     ssize_t buffer_size = 4096, read_buffer_size;
     char read_buffer[buffer_size], send_buffer[buffer_size];
     FILE * fd_request_file;
-    FILE * fd_write_file;
     int len;
+    bool is_fastcgi = false;
 
     struct sockaddr_in cli_sockaddr, srv_sockaddr;
     int cli_sockaddr_len, srv_sockaddr_len;
@@ -342,7 +345,12 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
             flag_temp = true;
     }
 
-    if (! flag_temp)
+    if (str_endwith(header_request.uri, ".php") )
+    {
+        sprintf(request_file, "%s/%s", doc_root, header_request.uri);
+        is_fastcgi = true;
+    }
+    else if (! flag_temp)
     {
         SET_RESPONSE_STATUS_405(header_resonse);
         strcpy(request_file, request_file_default->request_file_405);
@@ -419,105 +427,105 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
 
 
 
-    if (stat(request_file, &statbuf) != -1)
-        header_resonse.content_length = statbuf.st_size;
+
+    if (is_fastcgi)
+    {
+        process_request_fastcgi(connection_fd, request_file);
+    }
     else
     {
-        printf("get statbuf error!\n");
-        // continue;
-    }
-
-
-
-
-    if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
-    {
-        fprintf(stderr, "open file %s error!\n", request_file);
-        // exit(EXIT_FAILURE);
-        SET_RESPONSE_STATUS_403(header_resonse);
-        strcpy(request_file, request_file_default->request_file_403);
-        if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
+        if (stat(request_file, &statbuf) != -1)
+            header_resonse.content_length = statbuf.st_size;
+        else
         {
-            printf("open file error!\n");
+            printf("get statbuf error!\n");
             // continue;
         }
 
-    }
 
 
-
-    get_contenttype_by_filepath(request_file, mimebook, mimebook_len, &header_resonse);
-    printf("begine send\n");
-
-    // 拼接响应头
-    sprintf(response, "%s %d %s\n", header_resonse.http_version, header_resonse.status, header_resonse.status_desc);
-    sprintf(ch_temp, "Content-Type: %s\n", header_resonse.content_type);
-    strcat(response, ch_temp);
-    sprintf(ch_temp, "Content-Length: %llu\n", header_resonse.content_length);
-    strcat(response, ch_temp);
-    sprintf(ch_temp, "Connection: %s\n", header_resonse.connection);
-    strcat(response, ch_temp);
-    sprintf(ch_temp, "Server: %s\n\n", header_resonse.server);
-    strcat(response, ch_temp);
-
-
-    srv_sockaddr_len = sizeof(srv_sockaddr);
-    if (getsockname(connection_fd, (struct sockaddr *)&srv_sockaddr, &srv_sockaddr_len) == -1)
-        printf("getsockname() error!\n");
-    else
-    {
-        printf("local ip: %s", inet_ntop(AF_INET, &srv_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
-        printf(" local port: %d\n", ntohs(srv_sockaddr.sin_port));
-    }
-
-    cli_sockaddr_len = sizeof(cli_sockaddr);
-    if (getpeername(connection_fd, (struct sockaddr *)&cli_sockaddr, &cli_sockaddr_len) == -1)
-        printf("getpeername() error!\n");
-    else
-    {
-        printf("peer ip: %s", inet_ntop(AF_INET, &cli_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN) );
-        printf(" peer port: %d\n", ntohs(cli_sockaddr.sin_port) );
-    }
-
-    printf("response header:\n%s", response);
-
-    printf("Connection from client: %s:%d\n",
-           inet_ntop(AF_INET, &client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
-           ntohs(client_sockaddr->sin_port) );
-
-
-
-
-    // 发送响应头信息
-    write(connection_fd, response, strlen(response));
-
-
-    if ( (fd_write_file = fdopen(connection_fd, "wb") ) == NULL)
-    {
-        fprintf(stderr, "get conn fd error\n");
-        exit(EXIT_FAILURE);
-    }
-
-
-    while ( (read_buffer_size = fread(send_buffer, sizeof(char), buffer_size, fd_request_file) ) > 0)
-    {
-        fwrite(send_buffer, sizeof(char), read_buffer_size, fd_write_file);
-        // printf("send size: %lu\n", read_buffer_size);
-    }
-
-    if (read_buffer_size < buffer_size)
-    {
-        if (feof(fd_request_file) != 0)
-            printf("read to the end of file %s\n", request_file);
-        if (ferror(fd_request_file) != 0)
+        if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
         {
-            fprintf(stderr, "read file %s error\n", request_file);
-            exit(EXIT_FAILURE);
+            fprintf(stderr, "open file %s error!\n", request_file);
+            // exit(EXIT_FAILURE);
+            SET_RESPONSE_STATUS_403(header_resonse);
+            strcpy(request_file, request_file_default->request_file_403);
+            if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
+            {
+                printf("open file error!\n");
+                // continue;
+            }
+
         }
+
+
+
+        get_contenttype_by_filepath(request_file, mimebook, mimebook_len, &header_resonse);
+        printf("begine send\n");
+
+        // 拼接响应头
+        sprintf(response, "%s %d %s\n", header_resonse.http_version, header_resonse.status, header_resonse.status_desc);
+        sprintf(ch_temp, "Content-Type: %s\n", header_resonse.content_type);
+        strcat(response, ch_temp);
+        sprintf(ch_temp, "Content-Length: %llu\n", header_resonse.content_length);
+        strcat(response, ch_temp);
+        sprintf(ch_temp, "Connection: %s\n", header_resonse.connection);
+        strcat(response, ch_temp);
+        sprintf(ch_temp, "Server: %s\n\n", header_resonse.server);
+        strcat(response, ch_temp);
+
+
+        srv_sockaddr_len = sizeof(srv_sockaddr);
+        if (getsockname(connection_fd, (struct sockaddr *)&srv_sockaddr, &srv_sockaddr_len) == -1)
+            printf("getsockname() error!\n");
+        else
+        {
+            printf("local ip: %s", inet_ntop(AF_INET, &srv_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
+            printf(" local port: %d\n", ntohs(srv_sockaddr.sin_port));
+        }
+
+        cli_sockaddr_len = sizeof(cli_sockaddr);
+        if (getpeername(connection_fd, (struct sockaddr *)&cli_sockaddr, &cli_sockaddr_len) == -1)
+            printf("getpeername() error!\n");
+        else
+        {
+            printf("peer ip: %s", inet_ntop(AF_INET, &cli_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN) );
+            printf(" peer port: %d\n", ntohs(cli_sockaddr.sin_port) );
+        }
+
+        printf("response header:\n%s", response);
+
+        printf("Connection from client: %s:%d\n",
+               inet_ntop(AF_INET, &client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
+               ntohs(client_sockaddr->sin_port) );
+
+
+        // 发送响应头信息
+        writen(connection_fd, response, strlen(response));
+
+        while ( (read_buffer_size = fread(send_buffer, sizeof(char), buffer_size, fd_request_file) ) > 0)
+            writen(connection_fd, send_buffer, read_buffer_size);
+            // fwrite(send_buffer, sizeof(char), read_buffer_size, fd_write_file);
+
+
+        if (read_buffer_size < buffer_size)
+        {
+            if (feof(fd_request_file) != 0)
+                printf("read to the end of file %s\n", request_file);
+            if (ferror(fd_request_file) != 0)
+            {
+                fprintf(stderr, "read file %s error\n", request_file);
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        // close(conn);
+        close(connection_fd);
     }
 
-    // close(conn);
-    fclose(fd_write_file);
+
+
+
 }
 
 
@@ -529,8 +537,12 @@ int main() {
     int cli_len;
     pid_t pid;
 
+
+
+
     // 运行的配置参数
-    char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
+    // char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
+    char * doc_root = "/opt/application/nginx/myphp";
     const char * file_index[2] = {"index.html", "index.htm"};
     const char * method_allow[3] = {"GET", "DELETE", "POST"};
     char mime_file[FILE_PATH_MAX_LENTH] = "/home/liushan/mylab/clang/dagama/mime.types";
