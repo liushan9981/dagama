@@ -13,6 +13,7 @@
 #include <arpa/inet.h>
 #include <limits.h>
 #include <errno.h>
+#include <sys/epoll.h>
 
 #include "mysignal.h"
 #include "fastcgi.h"
@@ -29,6 +30,7 @@
 
 #define FILE_PATH_MAX_LENTH 256
 #define EXTENSION_NAME_LENTH 8
+#define MAX_EPOLL_SIZE 2000
 
 
 struct request_header {
@@ -274,10 +276,13 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 
 }
 
+
+
 void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
                      const struct default_request_file * request_file_default,
                      const char * doc_root, const char * file_index[], int file_index_len,
                      const char * method_allow[], int method_allow_len, const char * mime_file);
+
 
 void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
                      const struct default_request_file * request_file_default,
@@ -286,7 +291,7 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
 {
     char cli_addr_buff[INET_ADDRSTRLEN];
     ssize_t buffer_size = 4096, read_buffer_size;
-    char read_buffer[buffer_size], send_buffer[buffer_size];
+    char read_buffer[buffer_size], send_buffer[buffer_size], header_buf[buffer_size];
     FILE * fd_request_file;
     int len;
     bool is_fastcgi = false;
@@ -305,13 +310,60 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
             .status_desc = "OK"
     };
 
-    memset(read_buffer, 0, sizeof(read_buffer));
-    len = read(connection_fd, read_buffer, buffer_size - (ssize_t)1);
-    read_buffer[len] = '\0';
+
+
+    memset(header_buf, 0, sizeof(header_buf));
+    while (1)
+    {
+        memset(read_buffer, 0, sizeof(read_buffer));
+        if ( (len = readline(connection_fd, read_buffer, buffer_size - (ssize_t)1) ) == 2)
+        {
+            printf("value of len 1: %d\n", len);
+            read_buffer[len] = '\0';
+            strcat(header_buf, read_buffer);
+            if (strcmp(read_buffer, "\r\n") == 0)
+            {
+                printf("end line: %s\n", read_buffer);
+                break;
+            }
+        }
+        else if (len <= 0)
+        {
+            printf("value of len 2: %d\n", len);
+            printf("pre received:\n");
+            printf("%s", header_buf);
+            // 收到的字符数大于这个： GET / HTTP/1.1
+            // 即15个字符
+            if (strlen(header_buf) > 15 && (header_buf[strlen(header_buf) - 2] == '\r') &&
+                    (header_buf[strlen(header_buf) - 1] == '\n') )
+            {
+                printf("have receive normal header before\n");
+                break;
+            }
+            else
+            {
+                printf("receive illegal header\n");
+                return;
+            }
+
+        }
+        else
+        {
+            printf("value of len 3: %d\n", len);
+            read_buffer[len] = '\0';
+            strcat(header_buf, read_buffer);
+        }
+        printf("value of len 4: %d\n", len);
+    }
+
+
+
+//    len = read(connection_fd, read_buffer, buffer_size - (ssize_t)1);
+//    read_buffer[len] = '\0';
 
     // 打印调试信息
-//        printf("received:\n");
-//        printf("%s", read_buffer);
+    printf("received:\n");
+    printf("%s", header_buf);
 
 
     struct request_header header_request;
@@ -320,7 +372,7 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
     char ch_temp[1024];
     const int mimebook_len = 103;
 
-    parse_header_request(read_buffer, &header_request);
+    parse_header_request(header_buf, &header_request);
 
     printf("request_uri: %s\n", header_request.uri);
 
@@ -520,7 +572,7 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
         }
 
         // close(conn);
-        close(connection_fd);
+        // close(connection_fd);
     }
 
 
@@ -531,18 +583,22 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
 
 
 int main() {
-    int fd_server_sock, connection_fd;
+    int listen_fd, connfd;
     struct sockaddr_in server_sockaddr, client_sockaddr;
     const int myqueue = 100;
     int cli_len;
     pid_t pid;
 
+    // epoll
+    struct epoll_event event;
+    struct epoll_event * events;
+    int epoll_fd, ep_fd_ready_count, ep_fd_index;
 
 
 
     // 运行的配置参数
-    // char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
-    char * doc_root = "/opt/application/nginx/myphp";
+    char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
+    // char * doc_root = "/opt/application/nginx/myphp";
     const char * file_index[2] = {"index.html", "index.htm"};
     const char * method_allow[3] = {"GET", "DELETE", "POST"};
     char mime_file[FILE_PATH_MAX_LENTH] = "/home/liushan/mylab/clang/dagama/mime.types";
@@ -560,70 +616,120 @@ int main() {
 
 
     bzero(&server_sockaddr, sizeof(server_sockaddr));
-    fd_server_sock = socket(AF_INET, SOCK_STREAM, 0);
+    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
     server_sockaddr.sin_family = AF_INET;
     server_sockaddr.sin_port =  htons(8080);
     server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    if (bind(fd_server_sock, (struct sockaddr *)&server_sockaddr, sizeof(server_sockaddr)) == -1)
+    if (bind(listen_fd, (struct sockaddr *)&server_sockaddr, sizeof(server_sockaddr)) == -1)
     {
         printf("bind error\n");
         exit(EXIT_FAILURE);
     }
 
-    if (listen(fd_server_sock, myqueue) == -1)
+    if (listen(listen_fd, myqueue) == -1)
     {
         printf("listen error\n");
         exit(EXIT_FAILURE);
     }
 
-    // 处理子进程，以防变成僵死进程
-    signal(SIGCHLD, sig_chld);
+    epoll_fd = epoll_create1(0);
+    if (epoll_fd == -1)
+    {
+        printf("epoll_create error\n");
+        exit(EXIT_FAILURE);
+    }
+    event.data.fd = listen_fd;
+    event.events = EPOLLIN | EPOLLET;
+
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &event) == -1)
+    {
+        printf("epoll_ctl_add error fd: %d", listen_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    events = malloc(MAX_EPOLL_SIZE * sizeof(event) );
+
 
     while(1)
     {
         cli_len = sizeof(client_sockaddr);
-        if ( (connection_fd = accept(fd_server_sock, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
+        ep_fd_ready_count = epoll_wait(epoll_fd, events, MAX_EPOLL_SIZE, -1);
+        for (ep_fd_index = 0; ep_fd_index < ep_fd_ready_count; ep_fd_index++)
         {
-            // 重启被中断的系统调用accept
-            if (errno == EINTR)
+            if ( (events[ep_fd_index].events & EPOLLERR) || (events[ep_fd_index].events & EPOLLHUP) ||
+            ( !(events[ep_fd_index].events & EPOLLIN) ) )
+            {
+                printf("epoll error\n");
+                close(events[ep_fd_index].data.fd);
                 continue;
-            // accept返回前连接终止, SVR4实现
-            else if (errno == EPROTO)
-                continue;
-            // accept返回前连接终止, POSIX实现
-            else if (errno == ECONNABORTED)
-                continue;
+            }
+            else if (events[ep_fd_index].data.fd == listen_fd)
+            {
+                // 收到连接请求
+                if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
+                {
+                    // 重启被中断的系统调用accept
+                    if (errno == EINTR)
+                        continue;
+                        // accept返回前连接终止, SVR4实现
+                    else if (errno == EPROTO)
+                        continue;
+                        // accept返回前连接终止, POSIX实现
+                    else if (errno == ECONNABORTED)
+                        continue;
+                    else
+                    {
+                        printf("accept error!\n");
+                        exit(EXIT_FAILURE);
+                    }
+
+                }
+
+                event.data.fd = connfd;
+                event.events = EPOLLIN | EPOLLET;
+                if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, connfd, &event) == -1)
+                {
+                    printf("epoll_ctl connfd add error fd: %d\n", connfd);
+                    exit(EXIT_FAILURE);
+                }
+            }
             else
             {
-                printf("accept error!\n");
-                exit(EXIT_FAILURE);
+                // 收到数据
+                process_request(connfd, &client_sockaddr,
+                                &request_file_default,
+                                doc_root, file_index, sizeof(file_index) / sizeof(char *),
+                                method_allow, sizeof(method_allow) / sizeof(char *), mime_file);
+                close(connfd);
             }
 
         }
 
-        if ( (pid = fork() ) < 0)
-        {
-            printf("fork error\n");
-            exit(EXIT_FAILURE);
-        }
-        else if (pid != 0)
-        {
-            // parent
-            printf("fork child: %d\n", pid);
-            close(connection_fd);
-        }
-        else if (pid == 0)
-        {
-            // child
-            close(fd_server_sock);
-            process_request(connection_fd, &client_sockaddr,
-                            &request_file_default,
-                            doc_root, file_index, sizeof(file_index) / sizeof(char *),
-                            method_allow, sizeof(method_allow) / sizeof(char *), mime_file);
-            close(connection_fd);
-            exit(0);
-        }
+
+//
+//        if ( (pid = fork() ) < 0)
+//        {
+//            printf("fork error\n");
+//            exit(EXIT_FAILURE);
+//        }
+//        else if (pid != 0)
+//        {
+//            // parent
+//            printf("fork child: %d\n", pid);
+//            close(connfd);
+//        }
+//        else if (pid == 0)
+//        {
+//            // child
+//            close(listen_fd);
+//            process_request(connfd, &client_sockaddr,
+//                            &request_file_default,
+//                            doc_root, file_index, sizeof(file_index) / sizeof(char *),
+//                            method_allow, sizeof(method_allow) / sizeof(char *), mime_file);
+//            close(connfd);
+//            exit(0);
+//        }
 
     }
 
