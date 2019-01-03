@@ -81,6 +81,7 @@ void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mime
     if ( (fd_mime = fopen(mime_file, "r") ) == NULL)
     {
         printf("open %s failed\n", mime_file);
+        exit(EXIT_FAILURE);
     }
 
     while (fgets(line, buffersize - 1, fd_mime) != NULL)
@@ -281,24 +282,29 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
                      const struct default_request_file * request_file_default,
                      const char * doc_root, const char * file_index[], int file_index_len,
-                     const char * method_allow[], int method_allow_len, const char * mime_file);
+                     const char * method_allow[], int method_allow_len, const char * mime_file,
+                     char * recv_buf_index[]);
+
 
 
 void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
                      const struct default_request_file * request_file_default,
                      const char * doc_root, const char * file_index[], int file_index_len,
-                     const char * method_allow[], int method_allow_len, const char * mime_file)
+                     const char * method_allow[], int method_allow_len, const char * mime_file,
+                     char * recv_buf_index[])
 {
     char cli_addr_buff[INET_ADDRSTRLEN];
     ssize_t buffer_size = 4096, read_buffer_size;
     char read_buffer[buffer_size], send_buffer[buffer_size], header_buf[buffer_size];
     FILE * fd_request_file;
-    int len;
+    int len, index;
     bool is_fastcgi = false;
+    bool header_rcv = false;
 
     struct sockaddr_in cli_sockaddr, srv_sockaddr;
     int cli_sockaddr_len, srv_sockaddr_len;
     char addr_buf[INET_ADDRSTRLEN];
+
 
     struct response_header header_resonse = {
             .http_version = "HTTP/1.1",
@@ -313,48 +319,124 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
 
 
     memset(header_buf, 0, sizeof(header_buf));
-    while (1)
+    memset(read_buffer, 0, sizeof(read_buffer));
+
+    printf("now read data\n");
+    if ( (len = read(connection_fd, read_buffer, buffer_size - (ssize_t)1)) == 0)
     {
-        memset(read_buffer, 0, sizeof(read_buffer));
-        if ( (len = readline(connection_fd, read_buffer, buffer_size - (ssize_t)1) ) == 2)
+
+//            tmp_fd = events[index].data.fd;
+//            event.data.fd = tmp_fd;
+//            if ( epoll_ctl(epoll_fd, EPOLL_CTL_DEL, tmp_fd, &event) == -1)
+//            {
+//                printf("epoll_ctl connfd delete error\n");
+//                exit(EXIT_FAILURE);
+//            }
+//            else
+//                printf("epoll delete fd: %d\n", tmp_fd);
+//            close(tmp_fd);
+printf("recv len 1: %d", len);
+        free(recv_buf_index[connection_fd]);
+        recv_buf_index[connection_fd] = NULL;
+        close(connection_fd);
+        return;
+    }
+    else if (len < 0 && errno == EINTR)
+    {
+        printf("recv len 2: %d", len);
+        printf("was interuted, ignore\n");
+    }
+    else if (len < 0 && errno == ECONNRESET)
+    {
+        // 可能要关闭事件
+        printf("recv len 3: %d", len);
+        free(recv_buf_index[connection_fd]);
+        recv_buf_index[connection_fd] = NULL;
+        close(connection_fd);
+        return;
+    }
+    else if (len < 0)
+    {
+        printf("recv len 4: %d\n", len);
+        fprintf(stderr, "str_echo: read error\n");
+        close(connection_fd);
+        return;
+        // exit(EXIT_FAILURE);
+    }
+    else if (len > 0)
+    {
+        printf("recv len 5: %d", len);
+        read_buffer[len] = '\0';
+        printf("read_buffer:\n%s\n", read_buffer);
+        strncat(recv_buf_index[connection_fd], read_buffer, buffer_size);
+        printf("recv_buf_index[%d]:\n%s\n", connection_fd, recv_buf_index[connection_fd]);
+
+        for (index = 0; index < strlen(recv_buf_index[connection_fd]); index++)
         {
-            printf("value of len 1: %d\n", len);
-            read_buffer[len] = '\0';
-            strcat(header_buf, read_buffer);
-            if (strcmp(read_buffer, "\r\n") == 0)
+            if (recv_buf_index[connection_fd][index] == '\r' && recv_buf_index[connection_fd][index+1] == '\n' &&
+            recv_buf_index[connection_fd][index+2] == '\r' && recv_buf_index[connection_fd][index+3] == '\n')
             {
-                printf("end line: %s\n", read_buffer);
+                strncpy(header_buf, recv_buf_index[connection_fd], index + 3);
+                printf("index: %d header info:\n%s\n", index, header_buf);
+                // 清空接受的数据，粗暴的丢弃后面接收的数据
+                memset(recv_buf_index[connection_fd], 0, sizeof(recv_buf_index[connection_fd]));
+                header_rcv = true;
                 break;
-            }
-        }
-        else if (len <= 0)
-        {
-            printf("value of len 2: %d\n", len);
-            printf("pre received:\n");
-            printf("%s", header_buf);
-            // 收到的字符数大于这个： GET / HTTP/1.1
-            // 即15个字符
-            if (strlen(header_buf) > 15 && (header_buf[strlen(header_buf) - 2] == '\r') &&
-                    (header_buf[strlen(header_buf) - 1] == '\n') )
-            {
-                printf("have receive normal header before\n");
-                break;
-            }
-            else
-            {
-                printf("receive illegal header\n");
-                return;
             }
 
         }
-        else
-        {
-            printf("value of len 3: %d\n", len);
-            read_buffer[len] = '\0';
-            strcat(header_buf, read_buffer);
-        }
-        printf("value of len 4: %d\n", len);
+
+        if (! header_rcv)
+            // 还没有读到头文件结束，下次继续读取
+            return;
+            // 剩余可能还会有数据，暂不处理
     }
+
+    printf("have received header\n");
+
+
+
+//
+//    memset(read_buffer, 0, sizeof(read_buffer));
+//    if ( (len = readline(connection_fd, read_buffer, buffer_size - (ssize_t)1) ) == 2)
+//    {
+//        printf("value of len 1: %d\n", len);
+//        read_buffer[len] = '\0';
+//        strcat(header_buf, read_buffer);
+//        if (strcmp(read_buffer, "\r\n") == 0)
+//        {
+//            printf("end line: %s\n", read_buffer);
+//            break;
+//        }
+//    }
+//    else if (len <= 0)
+//    {
+//        printf("value of len 2: %d\n", len);
+//        printf("pre received:\n");
+//        printf("%s", header_buf);
+//        // 收到的字符数大于这个： GET / HTTP/1.1
+//        // 即15个字符
+//        if (strlen(header_buf) > 15 && (header_buf[strlen(header_buf) - 2] == '\r') &&
+//                (header_buf[strlen(header_buf) - 1] == '\n') )
+//        {
+//            printf("have receive normal header before\n");
+//            break;
+//        }
+//        else
+//        {
+//            printf("receive illegal header\n");
+//            return;
+//        }
+//
+//    }
+//    else
+//    {
+//        printf("value of len 3: %d\n", len);
+//        read_buffer[len] = '\0';
+//        strcat(header_buf, read_buffer);
+//    }
+//    printf("value of len 4: %d\n", len);
+
 
 
 
@@ -594,6 +676,12 @@ int main() {
     struct epoll_event * events;
     int epoll_fd, ep_fd_ready_count, ep_fd_index;
 
+    char * recv_buf[MAX_EPOLL_SIZE];
+
+
+    // 初始化所有指针指向NULL
+    for (ep_fd_index = 0; ep_fd_index < MAX_EPOLL_SIZE; ep_fd_index++)
+        recv_buf[ep_fd_index] = NULL;
 
 
     // 运行的配置参数
@@ -664,7 +752,7 @@ int main() {
                 close(events[ep_fd_index].data.fd);
                 continue;
             }
-            else if (events[ep_fd_index].data.fd == listen_fd)
+            else if ( (events[ep_fd_index].data.fd == listen_fd) && (events[ep_fd_index].events & EPOLLIN) )
             {
                 // 收到连接请求
                 if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
@@ -693,15 +781,24 @@ int main() {
                     printf("epoll_ctl connfd add error fd: %d\n", connfd);
                     exit(EXIT_FAILURE);
                 }
+
+                recv_buf[connfd] = malloc(sizeof(char) * MAX_EPOLL_SIZE);
+                memset(recv_buf[connfd], 0, sizeof(recv_buf[connfd]));
+                printf("receive conn:%d, allocate mem: %p\n", connfd, recv_buf[connfd]);
+            }
+            else if ( (events[ep_fd_index].events & EPOLLIN) && events[ep_fd_index].data.fd >= 4)
+            {
+                // 收到数据
+                printf("event recv data: %d\n", events[ep_fd_index].data.fd);
+                process_request(events[ep_fd_index].data.fd, &client_sockaddr,
+                                &request_file_default,
+                                doc_root, file_index, sizeof(file_index) / sizeof(char *),
+                                method_allow, sizeof(method_allow) / sizeof(char *), mime_file, recv_buf);
+
             }
             else
             {
-                // 收到数据
-                process_request(connfd, &client_sockaddr,
-                                &request_file_default,
-                                doc_root, file_index, sizeof(file_index) / sizeof(char *),
-                                method_allow, sizeof(method_allow) / sizeof(char *), mime_file);
-                close(connfd);
+                printf("event: epoll other event\n");
             }
 
         }
