@@ -33,13 +33,14 @@
 #define EXTENSION_NAME_LENTH 8
 #define MAX_EPOLL_SIZE 2000
 
-
+// 会话的状态
 #define SESSION_READ_HEADER 1
 #define SESSION_RESONSE 2
 #define SESSION_READ_READY 3
 #define SESSION_WRITE_READY 4
 #define SESSION_END 5
 
+// 客户端是否断开连接
 #define SESSION_RNSHUTDOWN 0
 #define SESSION_RSHUTDOWN 1
 
@@ -675,8 +676,8 @@ void process_request(struct sockaddr_in * client_sockaddr,
         printf("this is haha2\n");
         if ( (read_buffer_size = read(connSessionInfo->localFileFd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
         {
-            // if ( (res_io = writen(connSessionInfo->connFd, send_buffer, read_buffer_size) )  == -1)
-            if ( (res_io = write(connSessionInfo->connFd, send_buffer, read_buffer_size) ) < 0)
+            if ( (res_io = writen(connSessionInfo->connFd, send_buffer, read_buffer_size) )  == -1)
+            // if ( (res_io = write(connSessionInfo->connFd, send_buffer, read_buffer_size) ) < 0)
             {
                 printf("writen body failed, continue\n");
                 close(connSessionInfo->connFd);
