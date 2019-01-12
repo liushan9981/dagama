@@ -14,6 +14,7 @@
 #include <limits.h>
 #include <errno.h>
 #include <sys/epoll.h>
+#include <fcntl.h>
 
 #include "mysignal.h"
 #include "fastcgi.h"
@@ -31,6 +32,16 @@
 #define FILE_PATH_MAX_LENTH 256
 #define EXTENSION_NAME_LENTH 8
 #define MAX_EPOLL_SIZE 2000
+
+
+#define SESSION_READ_HEADER 1
+#define SESSION_RESONSE 2
+#define SESSION_READ_READY 3
+#define SESSION_WRITE_READY 4
+#define SESSION_END 5
+
+#define SESSION_RNSHUTDOWN 0
+#define SESSION_RSHUTDOWN 1
 
 
 struct request_header {
@@ -61,6 +72,20 @@ struct default_request_file {
     char request_file_404[FILE_PATH_MAX_LENTH];
     char request_file_403[FILE_PATH_MAX_LENTH];
     char request_file_405[FILE_PATH_MAX_LENTH];
+};
+
+
+struct connConf {
+    int connMaxTransactions;
+};
+
+struct connInfo {
+    int connTransactions;
+    int connFd;
+    int localFileFd;
+    char * recv_buf;
+    unsigned int sessionStatus;
+    unsigned int sessionRShutdown;
 };
 
 
@@ -279,24 +304,23 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 
 
 
-void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
+void process_request(struct sockaddr_in * client_sockaddr,
                      const struct default_request_file * request_file_default,
                      const char * doc_root, const char * file_index[], int file_index_len,
                      const char * method_allow[], int method_allow_len, const char * mime_file,
-                     char * recv_buf_index[]);
+                     struct connInfo * connSessionInfo);
 
 
 
-void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
+void process_request(struct sockaddr_in * client_sockaddr,
                      const struct default_request_file * request_file_default,
                      const char * doc_root, const char * file_index[], int file_index_len,
                      const char * method_allow[], int method_allow_len, const char * mime_file,
-                     char * recv_buf_index[])
+                     struct connInfo * connSessionInfo)
 {
     char cli_addr_buff[INET_ADDRSTRLEN];
     ssize_t buffer_size = 4096, read_buffer_size;
     char read_buffer[buffer_size], send_buffer[buffer_size], header_buf[buffer_size];
-    FILE * fd_request_file;
     int len, index;
     bool is_fastcgi = false;
     bool header_rcv = false;
@@ -316,14 +340,18 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
             .status_desc = "OK"
     };
 
+    int res_io;
 
+    printf("session status: %d localfile_fd: %d\n", connSessionInfo->sessionStatus, connSessionInfo->localFileFd);
 
-    memset(header_buf, 0, sizeof(header_buf));
-    memset(read_buffer, 0, sizeof(read_buffer));
-
-    printf("now read data\n");
-    if ( (len = read(connection_fd, read_buffer, buffer_size - (ssize_t)1)) == 0)
+    if ( connSessionInfo->sessionStatus == SESSION_READ_HEADER || connSessionInfo->sessionStatus == SESSION_READ_READY)
     {
+        memset(header_buf, 0, sizeof(header_buf));
+        memset(read_buffer, 0, sizeof(read_buffer));
+
+        printf("now read data\n");
+        if ( (len = read(connSessionInfo->connFd, read_buffer, buffer_size - (ssize_t)1)) == 0)
+        {
 
 //            tmp_fd = events[index].data.fd;
 //            event.data.fd = tmp_fd;
@@ -335,327 +363,379 @@ void process_request(int connection_fd, struct sockaddr_in * client_sockaddr,
 //            else
 //                printf("epoll delete fd: %d\n", tmp_fd);
 //            close(tmp_fd);
-printf("recv len 1: %d", len);
-        free(recv_buf_index[connection_fd]);
-        recv_buf_index[connection_fd] = NULL;
-        close(connection_fd);
-        return;
-    }
-    else if (len < 0 && errno == EINTR)
-    {
-        printf("recv len 2: %d", len);
-        printf("was interuted, ignore\n");
-    }
-    else if (len < 0 && errno == ECONNRESET)
-    {
-        // 可能要关闭事件
-        printf("recv len 3: %d", len);
-        free(recv_buf_index[connection_fd]);
-        recv_buf_index[connection_fd] = NULL;
-        close(connection_fd);
-        return;
-    }
-    else if (len < 0)
-    {
-        printf("recv len 4: %d\n", len);
-        fprintf(stderr, "str_echo: read error\n");
-        close(connection_fd);
-        return;
-        // exit(EXIT_FAILURE);
-    }
-    else if (len > 0)
-    {
-        printf("recv len 5: %d", len);
-        read_buffer[len] = '\0';
-        printf("read_buffer:\n%s\n", read_buffer);
-        strncat(recv_buf_index[connection_fd], read_buffer, buffer_size);
-        printf("recv_buf_index[%d]:\n%s\n", connection_fd, recv_buf_index[connection_fd]);
-
-        for (index = 0; index < strlen(recv_buf_index[connection_fd]); index++)
+            printf("recv len 1: %d", len);
+            free(connSessionInfo->recv_buf);
+            connSessionInfo->recv_buf = NULL;
+            connSessionInfo->sessionRShutdown = SESSION_RSHUTDOWN;
+            // close(connSessionInfo->connFd);
+            return;
+        }
+        else if (len < 0 && errno == EINTR)
         {
-            if (recv_buf_index[connection_fd][index] == '\r' && recv_buf_index[connection_fd][index+1] == '\n' &&
-            recv_buf_index[connection_fd][index+2] == '\r' && recv_buf_index[connection_fd][index+3] == '\n')
+            printf("recv len 2: %d", len);
+            printf("was interuted, ignore\n");
+        }
+        else if (len < 0 && errno == ECONNRESET)
+        {
+            // 可能要关闭事件
+            printf("recv len 3: %d", len);
+            free(connSessionInfo->recv_buf);
+            connSessionInfo->recv_buf = NULL;
+            connSessionInfo->localFileFd = -2;
+            connSessionInfo->sessionStatus = SESSION_READ_HEADER;
+
+            close(connSessionInfo->connFd);
+            return;
+        }
+        else if (len < 0)
+        {
+            printf("recv len 4: %d\n", len);
+            fprintf(stderr, "str_echo: read error\n");
+            free(connSessionInfo->recv_buf);
+            connSessionInfo->recv_buf = NULL;
+            connSessionInfo->sessionRShutdown = SESSION_RSHUTDOWN;
+            return;
+            // exit(EXIT_FAILURE);
+        }
+        else if (len > 0)
+        {
+            printf("recv len 5: %d", len);
+            read_buffer[len] = '\0';
+            // printf("read_buffer:\n%s\n", read_buffer);
+            strncat(connSessionInfo->recv_buf, read_buffer, buffer_size);
+            // printf("recv_buf_index[%d]:\n%s\n", connSessionInfo->connFd, connSessionInfo->recv_buf);
+
+            for (index = 0; index < strlen(connSessionInfo->recv_buf); index++)
             {
-                strncpy(header_buf, recv_buf_index[connection_fd], index + 3);
-                printf("index: %d header info:\n%s\n", index, header_buf);
-                // 清空接受的数据，粗暴的丢弃后面接收的数据
-                memset(recv_buf_index[connection_fd], 0, sizeof(recv_buf_index[connection_fd]));
-                header_rcv = true;
-                break;
+                if (connSessionInfo->recv_buf[index] == '\r' && connSessionInfo->recv_buf[index+1] == '\n' &&
+                    connSessionInfo->recv_buf[index+2] == '\r' && connSessionInfo->recv_buf[index+3] == '\n')
+                {
+                    strncpy(header_buf, connSessionInfo->recv_buf, index + 3);
+                    // printf("index: %d header info:\n%s\n", index, header_buf);
+                    // 清空接受的数据，粗暴的丢弃后面接收的数据
+                    memset(connSessionInfo->recv_buf, 0, sizeof(connSessionInfo->recv_buf));
+                    header_rcv = true;
+                    break;
+                }
+
             }
 
+            if (! header_rcv)
+                // 还没有读到头文件结束，下次继续读取
+                return;
+            // 剩余可能还会有数据，暂不处理
         }
 
-        if (! header_rcv)
-            // 还没有读到头文件结束，下次继续读取
-            return;
-            // 剩余可能还会有数据，暂不处理
-    }
-
-    printf("have received header\n");
-
-
-
-//
-//    memset(read_buffer, 0, sizeof(read_buffer));
-//    if ( (len = readline(connection_fd, read_buffer, buffer_size - (ssize_t)1) ) == 2)
-//    {
-//        printf("value of len 1: %d\n", len);
-//        read_buffer[len] = '\0';
-//        strcat(header_buf, read_buffer);
-//        if (strcmp(read_buffer, "\r\n") == 0)
-//        {
-//            printf("end line: %s\n", read_buffer);
-//            break;
-//        }
-//    }
-//    else if (len <= 0)
-//    {
-//        printf("value of len 2: %d\n", len);
-//        printf("pre received:\n");
-//        printf("%s", header_buf);
-//        // 收到的字符数大于这个： GET / HTTP/1.1
-//        // 即15个字符
-//        if (strlen(header_buf) > 15 && (header_buf[strlen(header_buf) - 2] == '\r') &&
-//                (header_buf[strlen(header_buf) - 1] == '\n') )
-//        {
-//            printf("have receive normal header before\n");
-//            break;
-//        }
-//        else
-//        {
-//            printf("receive illegal header\n");
-//            return;
-//        }
-//
-//    }
-//    else
-//    {
-//        printf("value of len 3: %d\n", len);
-//        read_buffer[len] = '\0';
-//        strcat(header_buf, read_buffer);
-//    }
-//    printf("value of len 4: %d\n", len);
-
-
+        printf("have received header\n");
 
 
 //    len = read(connection_fd, read_buffer, buffer_size - (ssize_t)1);
 //    read_buffer[len] = '\0';
 
-    // 打印调试信息
-    printf("received:\n");
-    printf("%s", header_buf);
-
-
-    struct request_header header_request;
-
-    char response[4096];
-    char ch_temp[1024];
-    const int mimebook_len = 103;
-
-    parse_header_request(header_buf, &header_request);
-
-    printf("request_uri: %s\n", header_request.uri);
-
-    struct stat statbuf;
-    char request_file[512];
-    int index_temp;
-    bool flag_temp;
-
-    printf("------------------\n");
-    printf("this is:%s\n", file_index[0]);
-    printf("this is:%s\n", file_index[1]);
-    printf("------------------\n");
-
-    struct mimedict mimebook[mimebook_len];
-    get_mimebook(mime_file, mimebook, mimebook_len);
-
-
-    flag_temp = false;
-    for (index_temp = 0; index_temp < 3; index_temp++)
-    {
-        if (strcmp(method_allow[index_temp], header_request.method) == 0)
-            flag_temp = true;
+        // 打印调试信息
+        printf("received:\n");
+        printf("%s", header_buf);
+        // 读取头完成
+        connSessionInfo->sessionStatus = SESSION_RESONSE;
     }
 
-    if (str_endwith(header_request.uri, ".php") )
+
+
+    if (connSessionInfo->localFileFd == -2)
     {
-        sprintf(request_file, "%s/%s", doc_root, header_request.uri);
-        is_fastcgi = true;
-    }
-    else if (! flag_temp)
-    {
-        SET_RESPONSE_STATUS_405(header_resonse);
-        strcpy(request_file, request_file_default->request_file_405);
-    }
-    else if (strcmp(header_request.method, "GET") == 0)
-    {
-        // 访问的uri是目录的，重写到该目录下的index文件
-        if (header_request.uri[strlen(header_request.uri) - 1] == '/')
+        struct request_header header_request;
+
+        char response[4096];
+        char ch_temp[1024];
+        const int mimebook_len = 103;
+
+        parse_header_request(header_buf, &header_request);
+
+        printf("request_uri: %s\n", header_request.uri);
+
+        struct stat statbuf;
+        char request_file[512];
+        int index_temp;
+        bool flag_temp;
+
+        printf("------------------\n");
+        printf("this is:%s\n", file_index[0]);
+        printf("this is:%s\n", file_index[1]);
+        printf("------------------\n");
+
+        struct mimedict mimebook[mimebook_len];
+        get_mimebook(mime_file, mimebook, mimebook_len);
+
+
+        flag_temp = false;
+        for (index_temp = 0; index_temp < 3; index_temp++)
         {
-            sprintf(request_file, "%s/%s%s", doc_root, header_request.uri, file_index[0]);
-            if (access(request_file, F_OK) == -1)
-            {
-                sprintf(request_file, "%s/%s%s", doc_root, header_request.uri, file_index[1]);
-                if (access(request_file, F_OK) == -1)
-                {
-                    SET_RESPONSE_STATUS_403(header_resonse);
-                    strcpy(request_file, request_file_default->request_file_403);
-                }
-                else
-                SET_RESPONSE_STATUS_200(header_resonse);
-            }
-            else
-            SET_RESPONSE_STATUS_200(header_resonse);
+            if (strcmp(method_allow[index_temp], header_request.method) == 0)
+                flag_temp = true;
         }
-        else
+
+        if (str_endwith(header_request.uri, ".php"))
         {
             sprintf(request_file, "%s/%s", doc_root, header_request.uri);
-
-            printf("request_file: %s\n", request_file);
-            // 根据文件是否存在，重新拼接请求文件，生成状态码
-            // 文件存在
-            if (access(request_file, F_OK) != -1)
+            is_fastcgi = true;
+        }
+        else if (!flag_temp)
+        {
+            SET_RESPONSE_STATUS_405(header_resonse);
+            strcpy(request_file, request_file_default->request_file_405);
+        }
+        else if (strcmp(header_request.method, "GET") == 0)
+        {
+            // 访问的uri是目录的，重写到该目录下的index文件
+            if (header_request.uri[strlen(header_request.uri) - 1] == '/')
             {
-                // 获取文件信息，如果失败则403
-                if (stat(request_file, &statbuf) != -1)
+                sprintf(request_file, "%s/%s%s", doc_root, header_request.uri, file_index[0]);
+                if (access(request_file, F_OK) == -1)
                 {
-                    // 如果为普通文件
-                    if (S_ISREG(statbuf.st_mode) )
+                    sprintf(request_file, "%s/%s%s", doc_root, header_request.uri, file_index[1]);
+                    if (access(request_file, F_OK) == -1)
                     {
+                        SET_RESPONSE_STATUS_403(header_resonse);
+                        strcpy(request_file, request_file_default->request_file_403);
+                    }
+                    else
                         SET_RESPONSE_STATUS_200(header_resonse);
+                }
+                else
+                    SET_RESPONSE_STATUS_200(header_resonse);
+            }
+            else
+            {
+                sprintf(request_file, "%s/%s", doc_root, header_request.uri);
+
+                printf("request_file: %s\n", request_file);
+                // 根据文件是否存在，重新拼接请求文件，生成状态码
+                // 文件存在
+                if (access(request_file, F_OK) != -1)
+                {
+                    // 获取文件信息，如果失败则403
+                    if (stat(request_file, &statbuf) != -1)
+                    {
+                        // 如果为普通文件
+                        if (S_ISREG(statbuf.st_mode)) {
+                            SET_RESPONSE_STATUS_200(header_resonse);
+                        } else {
+                            SET_RESPONSE_STATUS_404(header_resonse);
+                            strcpy(request_file, request_file_default->request_file_404);
+                        }
                     }
                     else
                     {
-                        SET_RESPONSE_STATUS_404(header_resonse);
-                        strcpy(request_file, request_file_default->request_file_404);
+                        printf("get file %s stat error\n", request_file);
+                        SET_RESPONSE_STATUS_403(header_resonse);
+                        strcpy(request_file, request_file_default->request_file_403);
                     }
+
                 }
+                // 文件不存在,则404
                 else
                 {
-                    printf("get file %s stat error\n", request_file);
-                    SET_RESPONSE_STATUS_403(header_resonse);
-                    strcpy(request_file, request_file_default->request_file_403);
+                    SET_RESPONSE_STATUS_404(header_resonse);
+                    strcpy(request_file, request_file_default->request_file_404);
                 }
 
-            }
-                // 文件不存在,则404
-            else
-            {
-                SET_RESPONSE_STATUS_404(header_resonse);
-                strcpy(request_file, request_file_default->request_file_404);
+                printf("request_file: %s\n", request_file);
+
             }
 
-            printf("request_file: %s\n", request_file);
 
+        }
+        else if (strcmp(header_request.method, "POST") == 0)
+        {
+            printf("POST is not finished yet!\n");
         }
 
 
-
-    }
-    else if (strcmp(header_request.method, "POST") == 0)
-    {
-        printf("POST is not finished yet!\n");
-    }
-
-
-
-
-    if (is_fastcgi)
-    {
-        process_request_fastcgi(connection_fd, request_file);
-    }
-    else
-    {
-        if (stat(request_file, &statbuf) != -1)
-            header_resonse.content_length = statbuf.st_size;
+        if (is_fastcgi)
+        {
+            process_request_fastcgi(connSessionInfo->connFd, request_file);
+        }
         else
         {
-            printf("get statbuf error!\n");
-            // continue;
-        }
-
-
-
-        if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
-        {
-            fprintf(stderr, "open file %s error!\n", request_file);
-            // exit(EXIT_FAILURE);
-            SET_RESPONSE_STATUS_403(header_resonse);
-            strcpy(request_file, request_file_default->request_file_403);
-            if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
+            if (stat(request_file, &statbuf) != -1)
+                header_resonse.content_length = statbuf.st_size;
+            else
             {
-                printf("open file error!\n");
+                printf("get statbuf error!\n");
                 // continue;
             }
 
-        }
 
 
-
-        get_contenttype_by_filepath(request_file, mimebook, mimebook_len, &header_resonse);
-        printf("begine send\n");
-
-        // 拼接响应头
-        sprintf(response, "%s %d %s\n", header_resonse.http_version, header_resonse.status, header_resonse.status_desc);
-        sprintf(ch_temp, "Content-Type: %s\n", header_resonse.content_type);
-        strcat(response, ch_temp);
-        sprintf(ch_temp, "Content-Length: %llu\n", header_resonse.content_length);
-        strcat(response, ch_temp);
-        sprintf(ch_temp, "Connection: %s\n", header_resonse.connection);
-        strcat(response, ch_temp);
-        sprintf(ch_temp, "Server: %s\n\n", header_resonse.server);
-        strcat(response, ch_temp);
-
-
-        srv_sockaddr_len = sizeof(srv_sockaddr);
-        if (getsockname(connection_fd, (struct sockaddr *)&srv_sockaddr, &srv_sockaddr_len) == -1)
-            printf("getsockname() error!\n");
-        else
-        {
-            printf("local ip: %s", inet_ntop(AF_INET, &srv_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
-            printf(" local port: %d\n", ntohs(srv_sockaddr.sin_port));
-        }
-
-        cli_sockaddr_len = sizeof(cli_sockaddr);
-        if (getpeername(connection_fd, (struct sockaddr *)&cli_sockaddr, &cli_sockaddr_len) == -1)
-            printf("getpeername() error!\n");
-        else
-        {
-            printf("peer ip: %s", inet_ntop(AF_INET, &cli_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN) );
-            printf(" peer port: %d\n", ntohs(cli_sockaddr.sin_port) );
-        }
-
-        printf("response header:\n%s", response);
-
-        printf("Connection from client: %s:%d\n",
-               inet_ntop(AF_INET, &client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
-               ntohs(client_sockaddr->sin_port) );
-
-
-        // 发送响应头信息
-        writen(connection_fd, response, strlen(response));
-
-        while ( (read_buffer_size = fread(send_buffer, sizeof(char), buffer_size, fd_request_file) ) > 0)
-            writen(connection_fd, send_buffer, read_buffer_size);
-            // fwrite(send_buffer, sizeof(char), read_buffer_size, fd_write_file);
-
-
-        if (read_buffer_size < buffer_size)
-        {
-            if (feof(fd_request_file) != 0)
-                printf("read to the end of file %s\n", request_file);
-            if (ferror(fd_request_file) != 0)
+            // if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
+            if ((connSessionInfo->localFileFd = open(request_file, O_RDONLY)) < 0)
             {
-                fprintf(stderr, "read file %s error\n", request_file);
-                exit(EXIT_FAILURE);
+                fprintf(stderr, "open file %s error!\n", request_file);
+                // exit(EXIT_FAILURE);
+                SET_RESPONSE_STATUS_403(header_resonse);
+                strcpy(request_file, request_file_default->request_file_403);
+                // if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
+                if ((connSessionInfo->localFileFd = open(request_file, O_RDONLY)) < 0)
+                {
+                    printf("open file error!\n");
+                    // continue;
+                }
+
+            }
+
+
+            get_contenttype_by_filepath(request_file, mimebook, mimebook_len, &header_resonse);
+            printf("begine send\n");
+
+            // 拼接响应头
+            sprintf(response, "%s %d %s\n", header_resonse.http_version, header_resonse.status,
+                    header_resonse.status_desc);
+            sprintf(ch_temp, "Content-Type: %s\n", header_resonse.content_type);
+            strcat(response, ch_temp);
+            sprintf(ch_temp, "Content-Length: %llu\n", header_resonse.content_length);
+            strcat(response, ch_temp);
+            sprintf(ch_temp, "Connection: %s\n", header_resonse.connection);
+            strcat(response, ch_temp);
+            sprintf(ch_temp, "Server: %s\n\n", header_resonse.server);
+            strcat(response, ch_temp);
+
+
+            srv_sockaddr_len = sizeof(srv_sockaddr);
+            if (getsockname(connSessionInfo->connFd, (struct sockaddr *) &srv_sockaddr, &srv_sockaddr_len) == -1)
+                printf("getsockname() error!\n");
+            else
+            {
+                printf("local ip: %s", inet_ntop(AF_INET, &srv_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
+                printf(" local port: %d\n", ntohs(srv_sockaddr.sin_port));
+            }
+
+            cli_sockaddr_len = sizeof(cli_sockaddr);
+            if (getpeername(connSessionInfo->connFd, (struct sockaddr *) &cli_sockaddr, &cli_sockaddr_len) == -1)
+                printf("getpeername() error!\n");
+            else
+            {
+                printf("peer ip: %s", inet_ntop(AF_INET, &cli_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
+                printf(" peer port: %d\n", ntohs(cli_sockaddr.sin_port));
+            }
+
+            printf("response header:\n%s", response);
+
+            printf("Connection from client: %s:%d\n",
+                   inet_ntop(AF_INET, &client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
+                   ntohs(client_sockaddr->sin_port));
+
+
+            // 发送响应头信息
+            if ((res_io = writen(connSessionInfo->connFd, response, strlen(response))) == -1)
+            {
+                printf("writen header failed, continue\n");
+                close(connSessionInfo->connFd);
+                return;
+            }
+            else
+            {
+                printf("writen header res: %d\n", res_io);
+            }
+
+        }
+    }
+    else if (connSessionInfo->localFileFd > 0)
+    {
+        printf("have sent headers, continue\n");
+    }
+    else
+    {
+        printf("known error, now return\n");
+        return;
+    }
+
+
+
+
+
+//    // while ( (read_buffer_size = fread(send_buffer, sizeof(char), buffer_size, fd_request_file) ) > 0)
+//    while ( (read_buffer_size = read(connSessionInfo->localFileFd, send_buffer, sizeof(char) * buffer_size) ) > 0)
+//    {
+//        if ( (res_io = writen(connSessionInfo->connFd, send_buffer, read_buffer_size) )  == -1)
+//        {
+//            printf("writen body failed, continue\n");
+//            close(connSessionInfo->connFd);
+//            return;
+//        }
+//        else
+//        {
+//            printf("writen body res: %d\n", res_io);
+//        }
+//        // fwrite(send_buffer, sizeof(char), read_buffer_size, fd_write_file);
+//    }
+
+    printf("this is haha1\n");
+    if (connSessionInfo->sessionStatus == SESSION_WRITE_READY)
+    {
+        printf("this is haha2\n");
+        if ( (read_buffer_size = read(connSessionInfo->localFileFd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
+        {
+            // if ( (res_io = writen(connSessionInfo->connFd, send_buffer, read_buffer_size) )  == -1)
+            if ( (res_io = write(connSessionInfo->connFd, send_buffer, read_buffer_size) ) < 0)
+            {
+                printf("writen body failed, continue\n");
+                close(connSessionInfo->connFd);
+                close(connSessionInfo->localFileFd);
+                return;
+            }
+            else if (res_io == read_buffer_size)
+            {
+                printf("writen body full, res: %d\n", res_io);
+            }
+            else
+            {
+                printf("writen body not full, res: %d read_buffer_size: %d\n", res_io, read_buffer_size);
             }
         }
+        else if (read_buffer_size == 0)
+        {
+            printf("finish response session\n");
+            (connSessionInfo->connTransactions)++;
+            printf("session count: %d\n", connSessionInfo->connTransactions);
+            if (connSessionInfo->sessionRShutdown == SESSION_RSHUTDOWN)
+            {
+                // 读取输入时，已经处理recv_buf
+                // connSessionInfo->recv_buf = NULL;
+                connSessionInfo->localFileFd = -2;
+                connSessionInfo->sessionStatus = SESSION_READ_HEADER;
+                close(connSessionInfo->connFd);
+            }
+            else
+            {
+                printf("finish session, now keep alive\n");
+            }
+            return;
+        }
+    }
+
+    printf("this is haha3\n");
+
+
+
+
+
+
+
+//        if (read_buffer_size < buffer_size)
+//        {
+//            if (feof(connSessionInfo->localFileFd) != 0)
+//                printf("read to the end of file\n");
+//            if (ferror(connSessionInfo->localFileFd) != 0)
+//            {
+//                fprintf(stderr, "read file error\n");
+//                exit(EXIT_FAILURE);
+//            }
+//        }
+
 
         // close(conn);
         // close(connection_fd);
-    }
+
 
 
 
@@ -665,7 +745,7 @@ printf("recv len 1: %d", len);
 
 
 int main() {
-    int listen_fd, connfd;
+    int listen_fd, connfd, tmpConnFd;
     struct sockaddr_in server_sockaddr, client_sockaddr;
     const int myqueue = 100;
     int cli_len;
@@ -674,14 +754,29 @@ int main() {
     // epoll
     struct epoll_event event;
     struct epoll_event * events;
+    uint32_t tmpEvent;
     int epoll_fd, ep_fd_ready_count, ep_fd_index;
 
-    char * recv_buf[MAX_EPOLL_SIZE];
+    // char * recv_buf[MAX_EPOLL_SIZE];
+
+
+
+
+    struct connConf connConfLimit;
+    struct connInfo connSessionInfos[MAX_EPOLL_SIZE];
+
 
 
     // 初始化所有指针指向NULL
     for (ep_fd_index = 0; ep_fd_index < MAX_EPOLL_SIZE; ep_fd_index++)
-        recv_buf[ep_fd_index] = NULL;
+    {
+        connSessionInfos[ep_fd_index].recv_buf = NULL;
+        connSessionInfos[ep_fd_index].localFileFd = -2;
+        connSessionInfos[ep_fd_index].sessionStatus = SESSION_READ_HEADER;
+        connSessionInfos[ep_fd_index].sessionRShutdown = SESSION_RNSHUTDOWN;
+        // recv_buf[ep_fd_index] = NULL;
+    }
+
 
 
     // 运行的配置参数
@@ -695,6 +790,7 @@ int main() {
             .request_file_403 = "/home/liushan/mylab/clang/dagama/webroot/html/403.html",
             .request_file_405 = "/home/liushan/mylab/clang/dagama/webroot/html/405.html"
     };
+
 
 
 
@@ -721,14 +817,14 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    epoll_fd = epoll_create1(0);
+    epoll_fd = epoll_create(MAX_EPOLL_SIZE);
     if (epoll_fd == -1)
     {
         printf("epoll_create error\n");
         exit(EXIT_FAILURE);
     }
     event.data.fd = listen_fd;
-    event.events = EPOLLIN | EPOLLET;
+    event.events = EPOLLIN;
 
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &event) == -1)
     {
@@ -742,18 +838,24 @@ int main() {
     while(1)
     {
         cli_len = sizeof(client_sockaddr);
+        printf("wait event\n");
         ep_fd_ready_count = epoll_wait(epoll_fd, events, MAX_EPOLL_SIZE, -1);
         for (ep_fd_index = 0; ep_fd_index < ep_fd_ready_count; ep_fd_index++)
         {
-            if ( (events[ep_fd_index].events & EPOLLERR) || (events[ep_fd_index].events & EPOLLHUP) ||
-            ( !(events[ep_fd_index].events & EPOLLIN) ) )
+            tmpEvent = events[ep_fd_index].events;
+            tmpConnFd = events[ep_fd_index].data.fd;
+
+            printf("this is hehe\n");
+//            if ( (tmpEvent & EPOLLERR) || (tmpEvent & EPOLLHUP) ||
+//            ( !(tmpEvent & EPOLLIN) ) || ( !(tmpEvent & EPOLLOUT) ) )
+//            {
+//                printf("epoll error\n");
+//                close(tmpConnFd);
+//                continue;
+//            }
+            if ( (tmpConnFd == listen_fd) && (tmpEvent & EPOLLIN) )
             {
-                printf("epoll error\n");
-                close(events[ep_fd_index].data.fd);
-                continue;
-            }
-            else if ( (events[ep_fd_index].data.fd == listen_fd) && (events[ep_fd_index].events & EPOLLIN) )
-            {
+                printf("EVENT: ready accept: %d\n", tmpConnFd);
                 // 收到连接请求
                 if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
                 {
@@ -774,26 +876,50 @@ int main() {
 
                 }
 
+
+                memset(&event, 0, sizeof(event));
+
                 event.data.fd = connfd;
-                event.events = EPOLLIN | EPOLLET;
+                event.events = EPOLLIN | EPOLLOUT;
                 if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, connfd, &event) == -1)
                 {
                     printf("epoll_ctl connfd add error fd: %d\n", connfd);
                     exit(EXIT_FAILURE);
                 }
 
-                recv_buf[connfd] = malloc(sizeof(char) * MAX_EPOLL_SIZE);
-                memset(recv_buf[connfd], 0, sizeof(recv_buf[connfd]));
-                printf("receive conn:%d, allocate mem: %p\n", connfd, recv_buf[connfd]);
+                connSessionInfos[connfd].recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
+                // recv_buf[connfd] = malloc(sizeof(char) * MAX_EPOLL_SIZE);
+                // memset(recv_buf[connfd], 0, sizeof(recv_buf[connfd]));
+                memset(connSessionInfos[connfd].recv_buf, 0, sizeof(connSessionInfos[connfd].recv_buf) );
+                printf("receive conn:%d, allocate mem: %p\n", connfd, connSessionInfos[connfd].recv_buf);
+
+                connSessionInfos[connfd].connFd = connfd;
+                connSessionInfos[connfd].connTransactions = 0;
             }
-            else if ( (events[ep_fd_index].events & EPOLLIN) && events[ep_fd_index].data.fd >= 4)
+            else if ( ( (tmpEvent & EPOLLIN) || (tmpEvent & EPOLLOUT) ) && tmpConnFd >= 4)
             {
-                // 收到数据
-                printf("event recv data: %d\n", events[ep_fd_index].data.fd);
-                process_request(events[ep_fd_index].data.fd, &client_sockaddr,
-                                &request_file_default,
-                                doc_root, file_index, sizeof(file_index) / sizeof(char *),
-                                method_allow, sizeof(method_allow) / sizeof(char *), mime_file, recv_buf);
+                if (tmpEvent & EPOLLIN)
+                {
+
+                    connSessionInfos[tmpConnFd].sessionStatus = SESSION_READ_READY;
+                    printf("EVENT: ready read: %d\n", tmpConnFd);
+                    process_request(&client_sockaddr,
+                                    &request_file_default,
+                                    doc_root, file_index, sizeof(file_index) / sizeof(char *),
+                                    method_allow, sizeof(method_allow) / sizeof(char *), mime_file, &connSessionInfos[tmpConnFd]);
+                }
+
+                if (tmpEvent & EPOLLOUT)
+                {
+                    connSessionInfos[tmpConnFd].sessionStatus = SESSION_WRITE_READY;
+                    printf("EVENT: ready write: %d\n", tmpConnFd);
+                    process_request(&client_sockaddr,
+                                    &request_file_default,
+                                    doc_root, file_index, sizeof(file_index) / sizeof(char *),
+                                    method_allow, sizeof(method_allow) / sizeof(char *), mime_file, &connSessionInfos[tmpConnFd]);
+
+                }
+
 
             }
             else
@@ -802,6 +928,13 @@ int main() {
             }
 
         }
+
+//
+//        void process_request(struct sockaddr_in * client_sockaddr,
+//                             const struct default_request_file * request_file_default,
+//                             const char * doc_root, const char * file_index[], int file_index_len,
+//                             const char * method_allow[], int method_allow_len, const char * mime_file,
+//                             struct connInfo * connSessionInfo)
 
 
 //

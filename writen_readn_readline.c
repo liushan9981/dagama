@@ -49,13 +49,19 @@ ssize_t writen(int fd, const void * vptr, size_t n)
 
     while (nleft > 0)
     {
+        printf("nwriten begine_send data\n");
         if ( (nwriten = write(fd, ptr, nleft) ) <= 0)
         {
+            printf("1 nwriten: %d\n", nwriten);
             if (nwriten < 0 && errno == EINTR)
+            {
                 nwriten = 0;
+                printf("recv interupt!\n");
+            }
             else
                 return (-1);
         }
+        printf("2 nwriten: %d\n", nwriten);
         nleft -= nwriten;
         ptr += nwriten;
     }
