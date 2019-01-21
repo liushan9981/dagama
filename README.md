@@ -1,10 +1,10 @@
 
 ### 简介
-dagama 名字取自航海家达伽马
-该项目是个web服务，简单支持fastcgi协议，并发使用epoll
-目前仅支持GET,响应200或者403 404 405
-访问目录时，支持index文件响应
-readn writen readline等函数，抄自《Unix网络编程》一书
+- dagama 名字取自航海家达伽马
+- 该项目是个web服务，简单支持fastcgi协议，并发使用epoll
+- 目前仅支持GET,响应200或者403 404 405
+- 访问目录时，支持index文件响应
+- readn writen readline等函数，抄自《Unix网络编程》一书
 
 ### 用途
 - 学习操作系统
