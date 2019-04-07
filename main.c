@@ -29,16 +29,19 @@
 #define SET_RESPONSE_STATUS_405(header_resonse)  header_resonse.status = 405; strcpy(header_resonse.status_desc, "method not allowed");
 
 
-#define FILE_PATH_MAX_LENTH 256
 #define EXTENSION_NAME_LENTH 8
 #define MAX_EPOLL_SIZE 2000
 
 // 会话的状态
 #define SESSION_READ_HEADER 1
-#define SESSION_RESONSE 2
-#define SESSION_READ_READY 3
-#define SESSION_WRITE_READY 4
-#define SESSION_END 5
+#define SESSION_RESPONSE 2
+#define SESSION_RESPONSE_FIN 3
+#define SESSION_END 4
+
+// 是否收到数据
+#define SESSION_DATA_READ_READY 1
+#define SESSION_DATA_WRITE_READY 2
+#define SESSION_DATA_HANDLED 3
 
 // 客户端是否断开连接
 #define SESSION_RNSHUTDOWN 0
@@ -69,10 +72,10 @@ struct mimedict {
     char content_type[128];
 };
 
-struct default_request_file {
-    char request_file_404[FILE_PATH_MAX_LENTH];
-    char request_file_403[FILE_PATH_MAX_LENTH];
-    char request_file_405[FILE_PATH_MAX_LENTH];
+struct DefaultReqFile {
+    char request_file_404[PATH_MAX];
+    char request_file_403[PATH_MAX];
+    char request_file_405[PATH_MAX];
 };
 
 
@@ -87,7 +90,27 @@ struct connInfo {
     char * recv_buf;
     unsigned int sessionStatus;
     unsigned int sessionRShutdown;
+    unsigned int sessionRcvData;
 };
+
+
+
+
+struct runParams {
+    struct connInfo * conninfo;
+    const struct DefaultReqFile * default_request_file;
+    char * file_index[2];
+    char * method_allow[3];
+    unsigned int method_allow_len;
+    struct mimedict * mimebook;
+    unsigned int mimebook_len;
+    char * doc_root;
+    struct sockaddr_in * client_sockaddr;
+};
+
+
+
+
 
 
 void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mimebook_len);
@@ -303,33 +326,133 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 
 }
 
+void init_session(struct connInfo * connSessionInfo);
 
-
-void process_request(struct sockaddr_in * client_sockaddr,
-                     const struct default_request_file * request_file_default,
-                     const char * doc_root, const char * file_index[], int file_index_len,
-                     const char * method_allow[], int method_allow_len, const char * mime_file,
-                     struct connInfo * connSessionInfo);
-
-
-
-void process_request(struct sockaddr_in * client_sockaddr,
-                     const struct default_request_file * request_file_default,
-                     const char * doc_root, const char * file_index[], int file_index_len,
-                     const char * method_allow[], int method_allow_len, const char * mime_file,
-                     struct connInfo * connSessionInfo)
+void init_session(struct connInfo * connSessionInfo)
 {
-    char cli_addr_buff[INET_ADDRSTRLEN];
-    ssize_t buffer_size = 4096, read_buffer_size;
-    char read_buffer[buffer_size], send_buffer[buffer_size], header_buf[buffer_size];
-    int len, index;
-    bool is_fastcgi = false;
-    bool header_rcv = false;
+        connSessionInfo->recv_buf = NULL;
+        connSessionInfo->localFileFd = -2;
+        connSessionInfo->sessionStatus = SESSION_READ_HEADER;
+        connSessionInfo->sessionRShutdown = SESSION_RNSHUTDOWN;
+        connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
+}
 
+
+
+void process_request_get_header(struct runParams *run_params, char *header_buf, ssize_t buffer_size);
+void process_request_response_header(struct runParams *run_params, char * header_buf, ssize_t buffer_size);
+void process_request_response_data(struct runParams *run_params);
+
+
+void process_request_get_header(struct runParams *run_params, char *header_buf, ssize_t buffer_size)
+{
+    bool header_rcv = false;
+    int index;
+    ssize_t len;
+    char read_buffer[buffer_size];
+
+    memset(header_buf, 0, (size_t) buffer_size);
+    memset(read_buffer, 0, sizeof(read_buffer));
+
+    printf("now read data\n");
+    printf("connfd: %d\n", run_params->conninfo->connFd);
+    if ( (len = read(run_params->conninfo->connFd, read_buffer, buffer_size - (size_t)1) ) == 0)
+    {
+        printf("recv len 1: %ld\n", len);
+        free(run_params->conninfo->recv_buf);
+        run_params->conninfo->recv_buf = NULL;
+        run_params->conninfo->sessionRShutdown = SESSION_RSHUTDOWN;
+        // close(connSessionInfo->connFd);
+
+        if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER)
+        {
+            printf("header recv error\n");
+            close(run_params->conninfo->connFd);
+        }
+
+        return;
+    }
+    else if (len < 0 && errno == EINTR)
+    {
+        printf("recv len 2: %ld", len);
+        printf("was interuted, ignore\n");
+    }
+    else if (len < 0 && errno == ECONNRESET)
+    {
+        // 可能要关闭事件
+        printf("recv len 3: %ld", len);
+        free(run_params->conninfo->recv_buf);
+        free(run_params->conninfo);
+        // init_session(run_params->conninfo);
+
+        close(run_params->conninfo->connFd);
+        return;
+    }
+    else if (len < 0)
+    {
+        printf("recv len 4: %ld\n", len);
+        fprintf(stderr, "str_echo: read error\n");
+        free(run_params->conninfo->recv_buf);
+        run_params->conninfo->recv_buf = NULL;
+        run_params->conninfo->sessionRShutdown = SESSION_RSHUTDOWN;
+
+        if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER)
+        {
+            printf("header recv error\n");
+            close(run_params->conninfo->connFd);
+        }
+
+        return;
+        // exit(EXIT_FAILURE);
+    }
+    else if (len > 0)
+    {
+        printf("recv len 5: %ld", len);
+        read_buffer[len] = '\0';
+        // printf("read_buffer:\n%s\n", read_buffer);
+        strncat(run_params->conninfo->recv_buf, read_buffer, buffer_size);
+        // printf("recv_buf_index[%d]:\n%s\n", connSessionInfo->connFd, connSessionInfo->recv_buf);
+
+        for (index = 0; index < strlen(run_params->conninfo->recv_buf); index++)
+        {
+            if (run_params->conninfo->recv_buf[index] == '\r' && run_params->conninfo->recv_buf[index+1] == '\n' &&
+                run_params->conninfo->recv_buf[index+2] == '\r' && run_params->conninfo->recv_buf[index+3] == '\n')
+            {
+                strncpy(header_buf, run_params->conninfo->recv_buf, index + 3);
+                // printf("index: %d header info:\n%s\n", index, header_buf);
+                // 清空接受的数据，粗暴的丢弃后面接收的数据
+                memset(run_params->conninfo->recv_buf, 0, sizeof(run_params->conninfo->recv_buf));
+                header_rcv = true;
+                break;
+            }
+
+        }
+
+        if (! header_rcv)
+            // 还没有读到头文件结束，下次继续读取
+            return;
+        // 剩余可能还会有数据，暂不处理
+    }
+
+    printf("have received header\n");
+
+    // 打印调试信息
+    printf("received:\n");
+    printf("%s", header_buf);
+    // 读取头完成
+    run_params->conninfo->sessionStatus = SESSION_RESPONSE;
+}
+
+
+void process_request_response_header(struct runParams *run_params, char * header_buf, ssize_t buffer_size)
+{
+
+    char cli_addr_buff[INET_ADDRSTRLEN];
+    bool is_fastcgi = false;
     struct sockaddr_in cli_sockaddr, srv_sockaddr;
     int cli_sockaddr_len, srv_sockaddr_len;
     char addr_buf[INET_ADDRSTRLEN];
-
+    int res_io;
 
     struct response_header header_resonse = {
             .http_version = "HTTP/1.1",
@@ -341,114 +464,14 @@ void process_request(struct sockaddr_in * client_sockaddr,
             .status_desc = "OK"
     };
 
-    int res_io;
-
-    printf("session status: %d localfile_fd: %d\n", connSessionInfo->sessionStatus, connSessionInfo->localFileFd);
-
-    if ( connSessionInfo->sessionStatus == SESSION_READ_HEADER || connSessionInfo->sessionStatus == SESSION_READ_READY)
-    {
-        memset(header_buf, 0, sizeof(header_buf));
-        memset(read_buffer, 0, sizeof(read_buffer));
-
-        printf("now read data\n");
-        if ( (len = read(connSessionInfo->connFd, read_buffer, buffer_size - (ssize_t)1)) == 0)
-        {
-
-//            tmp_fd = events[index].data.fd;
-//            event.data.fd = tmp_fd;
-//            if ( epoll_ctl(epoll_fd, EPOLL_CTL_DEL, tmp_fd, &event) == -1)
-//            {
-//                printf("epoll_ctl connfd delete error\n");
-//                exit(EXIT_FAILURE);
-//            }
-//            else
-//                printf("epoll delete fd: %d\n", tmp_fd);
-//            close(tmp_fd);
-            printf("recv len 1: %d", len);
-            free(connSessionInfo->recv_buf);
-            connSessionInfo->recv_buf = NULL;
-            connSessionInfo->sessionRShutdown = SESSION_RSHUTDOWN;
-            // close(connSessionInfo->connFd);
-            return;
-        }
-        else if (len < 0 && errno == EINTR)
-        {
-            printf("recv len 2: %d", len);
-            printf("was interuted, ignore\n");
-        }
-        else if (len < 0 && errno == ECONNRESET)
-        {
-            // 可能要关闭事件
-            printf("recv len 3: %d", len);
-            free(connSessionInfo->recv_buf);
-            connSessionInfo->recv_buf = NULL;
-            connSessionInfo->localFileFd = -2;
-            connSessionInfo->sessionStatus = SESSION_READ_HEADER;
-
-            close(connSessionInfo->connFd);
-            return;
-        }
-        else if (len < 0)
-        {
-            printf("recv len 4: %d\n", len);
-            fprintf(stderr, "str_echo: read error\n");
-            free(connSessionInfo->recv_buf);
-            connSessionInfo->recv_buf = NULL;
-            connSessionInfo->sessionRShutdown = SESSION_RSHUTDOWN;
-            return;
-            // exit(EXIT_FAILURE);
-        }
-        else if (len > 0)
-        {
-            printf("recv len 5: %d", len);
-            read_buffer[len] = '\0';
-            // printf("read_buffer:\n%s\n", read_buffer);
-            strncat(connSessionInfo->recv_buf, read_buffer, buffer_size);
-            // printf("recv_buf_index[%d]:\n%s\n", connSessionInfo->connFd, connSessionInfo->recv_buf);
-
-            for (index = 0; index < strlen(connSessionInfo->recv_buf); index++)
-            {
-                if (connSessionInfo->recv_buf[index] == '\r' && connSessionInfo->recv_buf[index+1] == '\n' &&
-                    connSessionInfo->recv_buf[index+2] == '\r' && connSessionInfo->recv_buf[index+3] == '\n')
-                {
-                    strncpy(header_buf, connSessionInfo->recv_buf, index + 3);
-                    // printf("index: %d header info:\n%s\n", index, header_buf);
-                    // 清空接受的数据，粗暴的丢弃后面接收的数据
-                    memset(connSessionInfo->recv_buf, 0, sizeof(connSessionInfo->recv_buf));
-                    header_rcv = true;
-                    break;
-                }
-
-            }
-
-            if (! header_rcv)
-                // 还没有读到头文件结束，下次继续读取
-                return;
-            // 剩余可能还会有数据，暂不处理
-        }
-
-        printf("have received header\n");
 
 
-//    len = read(connection_fd, read_buffer, buffer_size - (ssize_t)1);
-//    read_buffer[len] = '\0';
-
-        // 打印调试信息
-        printf("received:\n");
-        printf("%s", header_buf);
-        // 读取头完成
-        connSessionInfo->sessionStatus = SESSION_RESONSE;
-    }
-
-
-
-    if (connSessionInfo->localFileFd == -2)
+    if (run_params->conninfo->localFileFd == -2)
     {
         struct request_header header_request;
 
         char response[4096];
         char ch_temp[1024];
-        const int mimebook_len = 103;
 
         parse_header_request(header_buf, &header_request);
 
@@ -459,55 +482,50 @@ void process_request(struct sockaddr_in * client_sockaddr,
         int index_temp;
         bool flag_temp;
 
-        printf("------------------\n");
-        printf("this is:%s\n", file_index[0]);
-        printf("this is:%s\n", file_index[1]);
-        printf("------------------\n");
-
-        struct mimedict mimebook[mimebook_len];
-        get_mimebook(mime_file, mimebook, mimebook_len);
-
 
         flag_temp = false;
         for (index_temp = 0; index_temp < 3; index_temp++)
         {
-            if (strcmp(method_allow[index_temp], header_request.method) == 0)
+            printf("method: %s   %s\n", run_params->method_allow[index_temp], header_request.method);
+
+
+            if (strcmp(run_params->method_allow[index_temp], header_request.method) == 0)
                 flag_temp = true;
         }
 
         if (str_endwith(header_request.uri, ".php"))
         {
-            sprintf(request_file, "%s/%s", doc_root, header_request.uri);
+            sprintf(request_file, "%s/%s", run_params->doc_root, header_request.uri);
             is_fastcgi = true;
         }
         else if (!flag_temp)
         {
             SET_RESPONSE_STATUS_405(header_resonse);
-            strcpy(request_file, request_file_default->request_file_405);
+            strcpy(request_file, run_params->default_request_file->request_file_405);
         }
         else if (strcmp(header_request.method, "GET") == 0)
         {
             // 访问的uri是目录的，重写到该目录下的index文件
             if (header_request.uri[strlen(header_request.uri) - 1] == '/')
             {
-                sprintf(request_file, "%s/%s%s", doc_root, header_request.uri, file_index[0]);
+                sprintf(request_file, "%s/%s%s", run_params->doc_root, header_request.uri, run_params->file_index[0]);
                 if (access(request_file, F_OK) == -1)
                 {
-                    sprintf(request_file, "%s/%s%s", doc_root, header_request.uri, file_index[1]);
+                    sprintf(request_file, "%s/%s%s", run_params->doc_root, header_request.uri, run_params->file_index[1]);
                     if (access(request_file, F_OK) == -1)
                     {
                         SET_RESPONSE_STATUS_403(header_resonse);
-                        strcpy(request_file, request_file_default->request_file_403);
+                        strcpy(request_file, run_params->default_request_file->request_file_403);
                     }
                     else
-                        SET_RESPONSE_STATUS_200(header_resonse);
+                    SET_RESPONSE_STATUS_200(header_resonse);
                 }
                 else
-                    SET_RESPONSE_STATUS_200(header_resonse);
+                SET_RESPONSE_STATUS_200(header_resonse);
             }
             else
             {
-                sprintf(request_file, "%s/%s", doc_root, header_request.uri);
+                sprintf(request_file, "%s/%s", run_params->doc_root, header_request.uri);
 
                 printf("request_file: %s\n", request_file);
                 // 根据文件是否存在，重新拼接请求文件，生成状态码
@@ -522,22 +540,22 @@ void process_request(struct sockaddr_in * client_sockaddr,
                             SET_RESPONSE_STATUS_200(header_resonse);
                         } else {
                             SET_RESPONSE_STATUS_404(header_resonse);
-                            strcpy(request_file, request_file_default->request_file_404);
+                            strcpy(request_file, run_params->default_request_file->request_file_404);
                         }
                     }
                     else
                     {
                         printf("get file %s stat error\n", request_file);
                         SET_RESPONSE_STATUS_403(header_resonse);
-                        strcpy(request_file, request_file_default->request_file_403);
+                        strcpy(request_file, run_params->default_request_file->request_file_403);
                     }
 
                 }
-                // 文件不存在,则404
+                    // 文件不存在,则404
                 else
                 {
                     SET_RESPONSE_STATUS_404(header_resonse);
-                    strcpy(request_file, request_file_default->request_file_404);
+                    strcpy(request_file, run_params->default_request_file->request_file_404);
                 }
 
                 printf("request_file: %s\n", request_file);
@@ -554,7 +572,7 @@ void process_request(struct sockaddr_in * client_sockaddr,
 
         if (is_fastcgi)
         {
-            process_request_fastcgi(connSessionInfo->connFd, request_file);
+            process_request_fastcgi(run_params->conninfo->connFd, request_file);
         }
         else
         {
@@ -569,14 +587,14 @@ void process_request(struct sockaddr_in * client_sockaddr,
 
 
             // if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
-            if ((connSessionInfo->localFileFd = open(request_file, O_RDONLY)) < 0)
+            if ((run_params->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0)
             {
                 fprintf(stderr, "open file %s error!\n", request_file);
                 // exit(EXIT_FAILURE);
                 SET_RESPONSE_STATUS_403(header_resonse);
-                strcpy(request_file, request_file_default->request_file_403);
+                strcpy(request_file, run_params->default_request_file->request_file_403);
                 // if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
-                if ((connSessionInfo->localFileFd = open(request_file, O_RDONLY)) < 0)
+                if ((run_params->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0)
                 {
                     printf("open file error!\n");
                     // continue;
@@ -585,7 +603,8 @@ void process_request(struct sockaddr_in * client_sockaddr,
             }
 
 
-            get_contenttype_by_filepath(request_file, mimebook, mimebook_len, &header_resonse);
+            get_contenttype_by_filepath(request_file, run_params->mimebook, run_params->mimebook_len, &header_resonse);
+
             printf("begine send\n");
 
             // 拼接响应头
@@ -602,7 +621,7 @@ void process_request(struct sockaddr_in * client_sockaddr,
 
 
             srv_sockaddr_len = sizeof(srv_sockaddr);
-            if (getsockname(connSessionInfo->connFd, (struct sockaddr *) &srv_sockaddr, &srv_sockaddr_len) == -1)
+            if (getsockname(run_params->conninfo->connFd, (struct sockaddr *) &srv_sockaddr, &srv_sockaddr_len) == -1)
                 printf("getsockname() error!\n");
             else
             {
@@ -611,7 +630,7 @@ void process_request(struct sockaddr_in * client_sockaddr,
             }
 
             cli_sockaddr_len = sizeof(cli_sockaddr);
-            if (getpeername(connSessionInfo->connFd, (struct sockaddr *) &cli_sockaddr, &cli_sockaddr_len) == -1)
+            if (getpeername(run_params->conninfo->connFd, (struct sockaddr *) &cli_sockaddr, &cli_sockaddr_len) == -1)
                 printf("getpeername() error!\n");
             else
             {
@@ -622,15 +641,15 @@ void process_request(struct sockaddr_in * client_sockaddr,
             printf("response header:\n%s", response);
 
             printf("Connection from client: %s:%d\n",
-                   inet_ntop(AF_INET, &client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
-                   ntohs(client_sockaddr->sin_port));
+                   inet_ntop(AF_INET, &run_params->client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
+                   ntohs(run_params->client_sockaddr->sin_port));
 
 
             // 发送响应头信息
-            if ((res_io = writen(connSessionInfo->connFd, response, strlen(response))) == -1)
+            if ((res_io = writen(run_params->conninfo->connFd, response, strlen(response))) == -1)
             {
                 printf("writen header failed, continue\n");
-                close(connSessionInfo->connFd);
+                close(run_params->conninfo->connFd);
                 return;
             }
             else
@@ -640,7 +659,7 @@ void process_request(struct sockaddr_in * client_sockaddr,
 
         }
     }
-    else if (connSessionInfo->localFileFd > 0)
+    else if (run_params->conninfo->localFileFd > 0)
     {
         printf("have sent headers, continue\n");
     }
@@ -650,98 +669,109 @@ void process_request(struct sockaddr_in * client_sockaddr,
         return;
     }
 
+}
 
 
+void process_request_response_data(struct runParams *run_params)
+{
+    ssize_t buffer_size = 4096, read_buffer_size;
+    char send_buffer[buffer_size];
+    int res_io;
 
 
-//    // while ( (read_buffer_size = fread(send_buffer, sizeof(char), buffer_size, fd_request_file) ) > 0)
-//    while ( (read_buffer_size = read(connSessionInfo->localFileFd, send_buffer, sizeof(char) * buffer_size) ) > 0)
-//    {
-//        if ( (res_io = writen(connSessionInfo->connFd, send_buffer, read_buffer_size) )  == -1)
-//        {
-//            printf("writen body failed, continue\n");
-//            close(connSessionInfo->connFd);
-//            return;
-//        }
-//        else
-//        {
-//            printf("writen body res: %d\n", res_io);
-//        }
-//        // fwrite(send_buffer, sizeof(char), read_buffer_size, fd_write_file);
-//    }
-
-    printf("this is haha1\n");
-    if (connSessionInfo->sessionStatus == SESSION_WRITE_READY)
+    if ( (read_buffer_size = read(run_params->conninfo->localFileFd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
     {
-        printf("this is haha2\n");
-        if ( (read_buffer_size = read(connSessionInfo->localFileFd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
-        {
-            if ( (res_io = writen(connSessionInfo->connFd, send_buffer, read_buffer_size) )  == -1)
+        if ( (res_io = writen(run_params->conninfo->connFd, send_buffer, read_buffer_size) )  == -1)
             // if ( (res_io = write(connSessionInfo->connFd, send_buffer, read_buffer_size) ) < 0)
-            {
-                printf("writen body failed, continue\n");
-                close(connSessionInfo->connFd);
-                close(connSessionInfo->localFileFd);
-                return;
-            }
-            else if (res_io == read_buffer_size)
-            {
-                printf("writen body full, res: %d\n", res_io);
-            }
-            else
-            {
-                printf("writen body not full, res: %d read_buffer_size: %d\n", res_io, read_buffer_size);
-            }
-        }
-        else if (read_buffer_size == 0)
         {
-            printf("finish response session\n");
-            (connSessionInfo->connTransactions)++;
-            printf("session count: %d\n", connSessionInfo->connTransactions);
-            if (connSessionInfo->sessionRShutdown == SESSION_RSHUTDOWN)
-            {
-                // 读取输入时，已经处理recv_buf
-                // connSessionInfo->recv_buf = NULL;
-                connSessionInfo->localFileFd = -2;
-                connSessionInfo->sessionStatus = SESSION_READ_HEADER;
-                close(connSessionInfo->connFd);
-            }
-            else
-            {
-                printf("finish session, now keep alive\n");
-            }
+            printf("writen body failed, continue\n");
+            close(run_params->conninfo->connFd);
+            close(run_params->conninfo->localFileFd);
             return;
         }
+        else if (res_io == read_buffer_size)
+        {
+            printf("writen body full, res: %d\n", res_io);
+        }
+        else
+        {
+            printf("writen body not full, res: %d read_buffer_size: %d\n", res_io, read_buffer_size);
+        }
+    }
+    else if (read_buffer_size == 0)
+    {
+        printf("finish response session\n");
+        (run_params->conninfo->connTransactions)++;
+        printf("session count: %d\n", run_params->conninfo->connTransactions);
+        if (run_params->conninfo->sessionRShutdown == SESSION_RSHUTDOWN)
+        {
+            // 读取输入时，已经处理recv_buf
+            close(run_params->conninfo->connFd);
+            free(run_params->conninfo->recv_buf);
+            free(run_params->conninfo);
+
+        }
+        else
+        {
+//                printf("finish session, now keep alive\n");
+//                free(connSessionInfo->recv_buf);
+//                init_session(connSessionInfo);
+
+            close(run_params->conninfo->connFd);
+            free(run_params->conninfo->recv_buf);
+            free(run_params->conninfo);
+            // init_session(run_params->conninfo);
+
+
+
+//                printf("finish session, now keep alive\n");
+//                connSessionInfo->sessionStatus = SESSION_END;
+
+
+        }
+        return;
     }
 
-    printf("this is haha3\n");
+}
 
 
 
 
 
 
-
-//        if (read_buffer_size < buffer_size)
-//        {
-//            if (feof(connSessionInfo->localFileFd) != 0)
-//                printf("read to the end of file\n");
-//            if (ferror(connSessionInfo->localFileFd) != 0)
-//            {
-//                fprintf(stderr, "read file error\n");
-//                exit(EXIT_FAILURE);
-//            }
-//        }
+void process_request(struct runParams * run_params);
 
 
-        // close(conn);
-        // close(connection_fd);
+void process_request(struct runParams * run_params)
+{
+    ssize_t buffer_size = 4096;
+    char header_buf[buffer_size];
 
 
+    printf("session status: %d localfile_fd: %d\n", run_params->conninfo->sessionStatus, run_params->conninfo->localFileFd);
 
+    if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER && run_params->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
+    {
+        process_request_get_header(run_params, header_buf, buffer_size);
+    }
+    else
+    {
+        process_request_response_header(run_params, header_buf, buffer_size);
+    }
+
+
+    if (run_params->conninfo->sessionRcvData == SESSION_DATA_WRITE_READY && run_params->conninfo->sessionStatus == SESSION_RESPONSE)
+    {
+        process_request_response_data(run_params);
+    }
 
 
 }
+
+
+
+
+
 
 
 
@@ -750,54 +780,57 @@ int main() {
     struct sockaddr_in server_sockaddr, client_sockaddr;
     const int myqueue = 100;
     int cli_len;
-    pid_t pid;
+    int index, index2;
 
     // epoll
     struct epoll_event event;
     struct epoll_event * events;
     uint32_t tmpEvent;
     int epoll_fd, ep_fd_ready_count, ep_fd_index;
+    const int mimebook_len = 103;
 
-    // char * recv_buf[MAX_EPOLL_SIZE];
-
-
+    struct mimedict mimebook[mimebook_len];
 
 
     struct connConf connConfLimit;
-    struct connInfo connSessionInfos[MAX_EPOLL_SIZE];
 
-
-
-    // 初始化所有指针指向NULL
-    for (ep_fd_index = 0; ep_fd_index < MAX_EPOLL_SIZE; ep_fd_index++)
-    {
-        connSessionInfos[ep_fd_index].recv_buf = NULL;
-        connSessionInfos[ep_fd_index].localFileFd = -2;
-        connSessionInfos[ep_fd_index].sessionStatus = SESSION_READ_HEADER;
-        connSessionInfos[ep_fd_index].sessionRShutdown = SESSION_RNSHUTDOWN;
-        // recv_buf[ep_fd_index] = NULL;
-    }
+    struct connInfo * connSessionInfos;
 
 
 
     // 运行的配置参数
     char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
     // char * doc_root = "/opt/application/nginx/myphp";
-    const char * file_index[2] = {"index.html", "index.htm"};
-    const char * method_allow[3] = {"GET", "DELETE", "POST"};
-    char mime_file[FILE_PATH_MAX_LENTH] = "/home/liushan/mylab/clang/dagama/mime.types";
-    struct default_request_file request_file_default = {
+    char * file_index[2] = {"index.html", "index.htm"};
+    char * method_allow[3] = {"GET", "DELETE", "POST"};
+    char mime_file[PATH_MAX] = "/home/liushan/mylab/clang/dagama/mime.types";
+    struct DefaultReqFile request_file_default = {
             .request_file_404 = "/home/liushan/mylab/clang/dagama/webroot/html/404.html",
             .request_file_403 = "/home/liushan/mylab/clang/dagama/webroot/html/403.html",
             .request_file_405 = "/home/liushan/mylab/clang/dagama/webroot/html/405.html"
     };
 
 
+    struct runParams run_param[MAX_EPOLL_SIZE];
+
+    get_mimebook(mime_file, mimebook, mimebook_len);
 
 
+    for (index = 0; index < MAX_EPOLL_SIZE; index++)
+    {
+        run_param[index].default_request_file = &request_file_default;
+        for (index2 = 0; index2 < sizeof(file_index) / sizeof(char *); index2++)
+            run_param[index].file_index[index2] = file_index[index2];
 
+        for (index2 = 0; index2 < sizeof(method_allow) / sizeof(char *); index2++)
+            run_param[index].method_allow[index2] = method_allow[index2];
+        run_param->method_allow_len = sizeof(method_allow) / sizeof(char *);
+        run_param[index].mimebook = mimebook;
+        run_param[index].mimebook_len = mimebook_len;
+        run_param[index].doc_root = doc_root;
+        run_param[index].client_sockaddr = &client_sockaddr;
+    }
 
-    // exit(EXIT_SUCCESS);
 
 
     bzero(&server_sockaddr, sizeof(server_sockaddr));
@@ -839,128 +872,88 @@ int main() {
     while(1)
     {
         cli_len = sizeof(client_sockaddr);
-        printf("wait event\n");
+        // printf("wait event\n");
         ep_fd_ready_count = epoll_wait(epoll_fd, events, MAX_EPOLL_SIZE, -1);
         for (ep_fd_index = 0; ep_fd_index < ep_fd_ready_count; ep_fd_index++)
         {
             tmpEvent = events[ep_fd_index].events;
             tmpConnFd = events[ep_fd_index].data.fd;
 
-            printf("this is hehe\n");
-//            if ( (tmpEvent & EPOLLERR) || (tmpEvent & EPOLLHUP) ||
-//            ( !(tmpEvent & EPOLLIN) ) || ( !(tmpEvent & EPOLLOUT) ) )
-//            {
-//                printf("epoll error\n");
-//                close(tmpConnFd);
-//                continue;
-//            }
-            if ( (tmpConnFd == listen_fd) && (tmpEvent & EPOLLIN) )
-            {
-                printf("EVENT: ready accept: %d\n", tmpConnFd);
-                // 收到连接请求
-                if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
-                {
-                    // 重启被中断的系统调用accept
-                    if (errno == EINTR)
-                        continue;
-                        // accept返回前连接终止, SVR4实现
-                    else if (errno == EPROTO)
-                        continue;
-                        // accept返回前连接终止, POSIX实现
-                    else if (errno == ECONNABORTED)
-                        continue;
-                    else
-                    {
-                        printf("accept error!\n");
-                        exit(EXIT_FAILURE);
-                    }
 
-                }
-
-
-                memset(&event, 0, sizeof(event));
-
-                event.data.fd = connfd;
-                event.events = EPOLLIN | EPOLLOUT;
-                if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, connfd, &event) == -1)
-                {
-                    printf("epoll_ctl connfd add error fd: %d\n", connfd);
-                    exit(EXIT_FAILURE);
-                }
-
-                connSessionInfos[connfd].recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
-                // recv_buf[connfd] = malloc(sizeof(char) * MAX_EPOLL_SIZE);
-                // memset(recv_buf[connfd], 0, sizeof(recv_buf[connfd]));
-                memset(connSessionInfos[connfd].recv_buf, 0, sizeof(connSessionInfos[connfd].recv_buf) );
-                printf("receive conn:%d, allocate mem: %p\n", connfd, connSessionInfos[connfd].recv_buf);
-
-                connSessionInfos[connfd].connFd = connfd;
-                connSessionInfos[connfd].connTransactions = 0;
-            }
-            else if ( ( (tmpEvent & EPOLLIN) || (tmpEvent & EPOLLOUT) ) && tmpConnFd >= 4)
+            if (tmpConnFd == listen_fd)
             {
                 if (tmpEvent & EPOLLIN)
                 {
+                    printf("EVENT: ready accept: %d\n", tmpConnFd);
+                    // 收到连接请求
+                    if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
+                    {
+                        // 重启被中断的系统调用accept
+                        if (errno == EINTR)
+                            continue;
+                            // accept返回前连接终止, SVR4实现
+                        else if (errno == EPROTO)
+                            continue;
+                            // accept返回前连接终止, POSIX实现
+                        else if (errno == ECONNABORTED)
+                            continue;
+                        else
+                        {
+                            printf("accept error!\n");
+                            exit(EXIT_FAILURE);
+                        }
 
-                    connSessionInfos[tmpConnFd].sessionStatus = SESSION_READ_READY;
-                    printf("EVENT: ready read: %d\n", tmpConnFd);
-                    process_request(&client_sockaddr,
-                                    &request_file_default,
-                                    doc_root, file_index, sizeof(file_index) / sizeof(char *),
-                                    method_allow, sizeof(method_allow) / sizeof(char *), mime_file, &connSessionInfos[tmpConnFd]);
+                    }
+
+
+                    memset(&event, 0, sizeof(event));
+
+                    event.data.fd = connfd;
+                    event.events = EPOLLIN | EPOLLOUT;
+                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, connfd, &event) == -1)
+                    {
+                        printf("epoll_ctl connfd add error fd: %d\n", connfd);
+                        exit(EXIT_FAILURE);
+                    }
+
+                    connSessionInfos = malloc(sizeof(struct connInfo));
+                    init_session(connSessionInfos);
+
+                    connSessionInfos->recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
+                    memset(connSessionInfos->recv_buf, 0, sizeof(*connSessionInfos->recv_buf) );
+                    printf("receive conn:%d\n", connfd);
+
+                    connSessionInfos->connFd = connfd;
+                    connSessionInfos->connTransactions = 0;
+                    run_param[connfd].conninfo = connSessionInfos;
+                }
+            }
+            else if (tmpConnFd >= 4)
+            {
+                if (tmpEvent & EPOLLIN)
+                {
+                    if (run_param[tmpConnFd].conninfo->sessionStatus != SESSION_END)
+                    {
+                        run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_READ_READY;
+                        printf("EVENT: ready read: %d\n", tmpConnFd);
+                        process_request(&run_param[tmpConnFd]);
+                    }
                 }
 
                 if (tmpEvent & EPOLLOUT)
                 {
-                    connSessionInfos[tmpConnFd].sessionStatus = SESSION_WRITE_READY;
-                    printf("EVENT: ready write: %d\n", tmpConnFd);
-                    process_request(&client_sockaddr,
-                                    &request_file_default,
-                                    doc_root, file_index, sizeof(file_index) / sizeof(char *),
-                                    method_allow, sizeof(method_allow) / sizeof(char *), mime_file, &connSessionInfos[tmpConnFd]);
-
+                    if (run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE)
+                    {
+                        run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_WRITE_READY;
+                        printf("EVENT: ready write: %d\n", tmpConnFd);
+                        process_request(&run_param[tmpConnFd]);
+                    }
                 }
-
-
             }
-            else
-            {
-                printf("event: epoll other event\n");
-            }
+
 
         }
 
-//
-//        void process_request(struct sockaddr_in * client_sockaddr,
-//                             const struct default_request_file * request_file_default,
-//                             const char * doc_root, const char * file_index[], int file_index_len,
-//                             const char * method_allow[], int method_allow_len, const char * mime_file,
-//                             struct connInfo * connSessionInfo)
-
-
-//
-//        if ( (pid = fork() ) < 0)
-//        {
-//            printf("fork error\n");
-//            exit(EXIT_FAILURE);
-//        }
-//        else if (pid != 0)
-//        {
-//            // parent
-//            printf("fork child: %d\n", pid);
-//            close(connfd);
-//        }
-//        else if (pid == 0)
-//        {
-//            // child
-//            close(listen_fd);
-//            process_request(connfd, &client_sockaddr,
-//                            &request_file_default,
-//                            doc_root, file_index, sizeof(file_index) / sizeof(char *),
-//                            method_allow, sizeof(method_allow) / sizeof(char *), mime_file);
-//            close(connfd);
-//            exit(0);
-//        }
 
     }
 
