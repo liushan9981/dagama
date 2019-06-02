@@ -16,6 +16,9 @@
 #include <sys/epoll.h>
 #include <fcntl.h>
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
 #include "mysignal.h"
 #include "fastcgi.h"
 #include "tool.h"
@@ -106,6 +109,9 @@ struct runParams {
     unsigned int mimebook_len;
     char * doc_root;
     struct sockaddr_in * client_sockaddr;
+    bool is_https;
+    bool https_ssl_have_conned;
+    SSL * ssl;
 };
 
 
@@ -356,7 +362,13 @@ void process_request_get_header(struct runParams *run_params, char *header_buf, 
 
     printf("now read data\n");
     printf("connfd: %d\n", run_params->conninfo->connFd);
-    if ( (len = read(run_params->conninfo->connFd, read_buffer, buffer_size - (size_t)1) ) == 0)
+    if ( (run_params->is_https) )
+        len = SSL_read(run_params->ssl, read_buffer, buffer_size - (size_t)1);
+    else
+        len = read(run_params->conninfo->connFd, read_buffer, buffer_size - (size_t)1);
+
+
+    if ( len == 0)
     {
         printf("recv len 1: %ld\n", len);
         free(run_params->conninfo->recv_buf);
@@ -646,7 +658,13 @@ void process_request_response_header(struct runParams *run_params, char * header
 
 
             // 发送响应头信息
-            if ((res_io = writen(run_params->conninfo->connFd, response, strlen(response))) == -1)
+            if (run_params->is_https)
+                res_io = SSL_write(run_params->ssl, response, strlen(response));
+            else
+                res_io = writen(run_params->conninfo->connFd, response, strlen(response));
+
+
+            if (res_io < 0)
             {
                 printf("writen header failed, continue\n");
                 close(run_params->conninfo->connFd);
@@ -679,9 +697,16 @@ void process_request_response_data(struct runParams *run_params)
     int res_io;
 
 
+
     if ( (read_buffer_size = read(run_params->conninfo->localFileFd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
     {
-        if ( (res_io = writen(run_params->conninfo->connFd, send_buffer, read_buffer_size) )  == -1)
+        if (run_params->is_https)
+            res_io = SSL_write(run_params->ssl, send_buffer, read_buffer_size);
+        else
+            res_io = writen(run_params->conninfo->connFd, send_buffer, read_buffer_size);
+
+
+        if (res_io  == -1)
             // if ( (res_io = write(connSessionInfo->connFd, send_buffer, read_buffer_size) ) < 0)
         {
             printf("writen body failed, continue\n");
@@ -771,16 +796,103 @@ void process_request(struct runParams * run_params)
 
 
 
+int create_listen_sock(int port, struct sockaddr_in * server_sockaddr);
 
 
+int create_listen_sock(int port, struct sockaddr_in * server_sockaddr)
+{
+    int listen_fd;
+    // struct sockaddr_in server_sockaddr;
+    const int myqueue = 100;
+
+    bzero(server_sockaddr, sizeof(*server_sockaddr));
+    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    printf("listen_fd: %d\n", listen_fd);
+
+    server_sockaddr->sin_family = AF_INET;
+    server_sockaddr->sin_port =  htons(port);
+    server_sockaddr->sin_addr.s_addr = htonl(INADDR_ANY);
+
+    if (bind(listen_fd, (struct sockaddr *)server_sockaddr, sizeof(*server_sockaddr)) == -1)
+    {
+        printf("bind error errno: %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+
+    if (listen(listen_fd, myqueue) == -1)
+    {
+        printf("listen error\n");
+        exit(EXIT_FAILURE);
+    }
+
+    return listen_fd;
+}
+
+
+
+void init_openssl();
+SSL_CTX * create_context_ssl(void);
+void configure_context_ssl(SSL_CTX * ctx);
+
+
+void init_openssl()
+{
+    SSL_load_error_strings();
+    OpenSSL_add_ssl_algorithms();
+}
+
+
+SSL_CTX * create_context_ssl(void)
+{
+    const SSL_METHOD *method;
+    SSL_CTX * ctx;
+
+    method = SSLv23_server_method();
+    ctx = SSL_CTX_new(method);
+    if (!ctx)
+    {
+        printf("create context failed\n");
+        exit(EXIT_FAILURE);
+    }
+
+    return ctx;
+}
+
+void configure_context_ssl(SSL_CTX * ctx)
+{
+    char * crt = "/home/liushan/mylab/clang/cert/kubelet_node-4.crt";
+    char * key = "/home/liushan/mylab/clang/cert/kubelet_node-4.key";
+
+    SSL_CTX_set_ecdh_auto(ctx, 1);
+
+    if (SSL_CTX_use_certificate_file(ctx, crt, SSL_FILETYPE_PEM) <= 0)
+    {
+        printf("use cert file error\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if (SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) <= 0)
+    {
+        printf("use cert file error\n");
+        exit(EXIT_FAILURE);
+    }
+
+}
 
 
 int main() {
-    int listen_fd, connfd, tmpConnFd;
-    struct sockaddr_in server_sockaddr, client_sockaddr;
-    const int myqueue = 100;
-    int cli_len;
+    int http_listen_fd, https_listen_fd, connfd, tmpConnFd, cli_len;
+    struct sockaddr_in client_sockaddr, http_server_sockaddr, https_server_sockaddr;
     int index, index2;
+
+    SSL_CTX * ctx;
+
+    // 设置ssl
+    init_openssl();
+    ctx = create_context_ssl();
+    configure_context_ssl(ctx);
+
 
     // epoll
     struct epoll_event event;
@@ -829,27 +941,16 @@ int main() {
         run_param[index].mimebook_len = mimebook_len;
         run_param[index].doc_root = doc_root;
         run_param[index].client_sockaddr = &client_sockaddr;
+        run_param[index].is_https = false;
+        run_param[index].https_ssl_have_conned = false;
+        run_param[index].ssl = NULL;
     }
 
 
 
-    bzero(&server_sockaddr, sizeof(server_sockaddr));
-    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    server_sockaddr.sin_family = AF_INET;
-    server_sockaddr.sin_port =  htons(8080);
-    server_sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    http_listen_fd = create_listen_sock(8080, &http_server_sockaddr);
+    https_listen_fd = create_listen_sock(8043, &https_server_sockaddr);
 
-    if (bind(listen_fd, (struct sockaddr *)&server_sockaddr, sizeof(server_sockaddr)) == -1)
-    {
-        printf("bind error\n");
-        exit(EXIT_FAILURE);
-    }
-
-    if (listen(listen_fd, myqueue) == -1)
-    {
-        printf("listen error\n");
-        exit(EXIT_FAILURE);
-    }
 
     epoll_fd = epoll_create(MAX_EPOLL_SIZE);
     if (epoll_fd == -1)
@@ -857,14 +958,26 @@ int main() {
         printf("epoll_create error\n");
         exit(EXIT_FAILURE);
     }
-    event.data.fd = listen_fd;
-    event.events = EPOLLIN;
 
-    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listen_fd, &event) == -1)
+
+    // https_listen http_listen 加入event
+    event.data.fd = http_listen_fd;
+    event.events = EPOLLIN;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, http_listen_fd, &event) == -1)
     {
-        printf("epoll_ctl_add error fd: %d", listen_fd);
+        printf("epoll_ctl_add error fd: %d", http_listen_fd);
         exit(EXIT_FAILURE);
     }
+
+    event.data.fd = https_listen_fd;
+    event.events = EPOLLIN;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, https_listen_fd, &event) == -1)
+    {
+        printf("epoll_ctl_add error fd: %d", https_listen_fd);
+        exit(EXIT_FAILURE);
+    }
+
+
 
     events = malloc(MAX_EPOLL_SIZE * sizeof(event) );
 
@@ -880,13 +993,13 @@ int main() {
             tmpConnFd = events[ep_fd_index].data.fd;
 
 
-            if (tmpConnFd == listen_fd)
+            if (tmpConnFd == http_listen_fd)
             {
                 if (tmpEvent & EPOLLIN)
                 {
-                    printf("EVENT: ready accept: %d\n", tmpConnFd);
+                    printf("EVENT: http ready accept: %d\n", tmpConnFd);
                     // 收到连接请求
-                    if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
+                    if ( (connfd = accept(http_listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
                     {
                         // 重启被中断的系统调用accept
                         if (errno == EINTR)
@@ -928,18 +1041,116 @@ int main() {
                     run_param[connfd].conninfo = connSessionInfos;
                 }
             }
-            else if (tmpConnFd >= 4)
+            else if (tmpConnFd == https_listen_fd)
             {
                 if (tmpEvent & EPOLLIN)
                 {
-                    if (run_param[tmpConnFd].conninfo->sessionStatus != SESSION_END)
+                    printf("EVENT: https ready accept: %d\n", tmpConnFd);
+                    // 收到连接请求
+                    if ( (connfd = accept(https_listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
                     {
-                        run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_READ_READY;
-                        printf("EVENT: ready read: %d\n", tmpConnFd);
-                        process_request(&run_param[tmpConnFd]);
+                        // 重启被中断的系统调用accept
+                        if (errno == EINTR)
+                            continue;
+                            // accept返回前连接终止, SVR4实现
+                        else if (errno == EPROTO)
+                            continue;
+                            // accept返回前连接终止, POSIX实现
+                        else if (errno == ECONNABORTED)
+                            continue;
+                        else
+                        {
+                            printf("accept error!\n");
+                            exit(EXIT_FAILURE);
+                        }
+
                     }
+
+
+
+
+                    memset(&event, 0, sizeof(event));
+
+                    event.data.fd = connfd;
+                    event.events = EPOLLIN | EPOLLOUT;
+                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, connfd, &event) == -1)
+                    {
+                        printf("epoll_ctl connfd add error fd: %d\n", connfd);
+                        exit(EXIT_FAILURE);
+                    }
+
+                    connSessionInfos = malloc(sizeof(struct connInfo));
+                    init_session(connSessionInfos);
+
+                    connSessionInfos->recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
+                    memset(connSessionInfos->recv_buf, 0, sizeof(*connSessionInfos->recv_buf) );
+                    printf("receive conn:%d\n", connfd);
+
+                    connSessionInfos->connFd = connfd;
+                    connSessionInfos->connTransactions = 0;
+                    run_param[connfd].conninfo = connSessionInfos;
+
+
+                    run_param[connfd].is_https = true;
+                    run_param[connfd].https_ssl_have_conned = false;
+
+
+                    SSL * ssl;
+                    ssl = SSL_new(ctx);
+                    SSL_set_fd(ssl, connfd);
+
+                    if (SSL_accept(ssl) <= 0)
+                    {
+                        printf("#1 ssl accept error errno: %d\n", errno);
+                        exit(EXIT_FAILURE);
+                    }
+                    else
+                    {
+                        printf("#1 ssl established %d\n", tmpConnFd);
+                        run_param[connfd].https_ssl_have_conned = true;
+                        run_param[connfd].ssl = ssl;
+                    }
+
+
+                }
+            }
+            else if (tmpConnFd >= 5)
+            {
+                // 有数据到达，可以读
+                if (tmpEvent & EPOLLIN)
+                {
+                    // https访问ssl未建立连接
+                    if (run_param[tmpConnFd].is_https && (! run_param[tmpConnFd].https_ssl_have_conned) )
+                    {
+                        SSL * ssl;
+                        ssl = SSL_new(ctx);
+                        SSL_set_fd(ssl, tmpConnFd);
+
+                        if (SSL_accept(ssl) <= 0)
+                        {
+                            printf("#2 ssl accept error errno: %d\n", errno);
+                            exit(EXIT_FAILURE);
+                        }
+                        else
+                        {
+                            printf("ssl established %d\n", tmpConnFd);
+                            run_param[tmpConnFd].https_ssl_have_conned = true;
+                            run_param[tmpConnFd].ssl = ssl;
+                        }
+                    }
+                    else
+                    {
+                        if (run_param[tmpConnFd].conninfo->sessionStatus != SESSION_END)
+                        {
+                            run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_READ_READY;
+                            printf("EVENT: ready read: %d\n", tmpConnFd);
+                            process_request(&run_param[tmpConnFd]);
+                        }
+                    }
+
                 }
 
+                // 可以写
                 if (tmpEvent & EPOLLOUT)
                 {
                     if (run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE)
