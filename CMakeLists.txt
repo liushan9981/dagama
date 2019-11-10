@@ -7,5 +7,5 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -lssl")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -lcrypto")
 
 set(SOURCE_FILES main.c mysignal.c  mysignal.h fastcgi.c fastcgi.h
-        writen_readn_readline.c writen_readn_readline.h tool.c tool.h process_request.c process_request.h)
+        writen_readn_readline.c writen_readn_readline.h mystring.c mystring.h process_request.c process_request.h handle_config.c handle_config.h main.h)
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})

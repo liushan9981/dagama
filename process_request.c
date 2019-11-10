@@ -21,7 +21,7 @@
 
 #include "mysignal.h"
 #include "fastcgi.h"
-#include "tool.h"
+#include "mystring.h"
 #include "writen_readn_readline.h"
 #include "process_request.h"
 

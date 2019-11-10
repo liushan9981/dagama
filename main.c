@@ -21,190 +21,32 @@
 
 #include "mysignal.h"
 #include "fastcgi.h"
-#include "tool.h"
+#include "mystring.h"
 #include "process_request.h"
 #include "writen_readn_readline.h"
 
-
-#define SET_RESPONSE_STATUS_200(header_resonse)  header_resonse.status = 200; strcpy(header_resonse.status_desc, "OK")
-#define SET_RESPONSE_STATUS_403(header_resonse)  header_resonse.status = 403; strcpy(header_resonse.status_desc, "forbidden")
-#define SET_RESPONSE_STATUS_404(header_resonse)  header_resonse.status = 404; strcpy(header_resonse.status_desc, "file not found");
-#define SET_RESPONSE_STATUS_405(header_resonse)  header_resonse.status = 405; strcpy(header_resonse.status_desc, "method not allowed");
-
-
-#define EXTENSION_NAME_LENTH 8
-#define MAX_EPOLL_SIZE 2000
-
-// 会话的状态
-#define SESSION_READ_HEADER 1
-#define SESSION_RESPONSE 2
-#define SESSION_RESPONSE_FIN 3
-#define SESSION_END 4
-
-// 是否收到数据
-#define SESSION_DATA_READ_READY 1
-#define SESSION_DATA_WRITE_READY 2
-#define SESSION_DATA_HANDLED 3
-
-// 客户端是否断开连接
-#define SESSION_RNSHUTDOWN 0
-#define SESSION_RSHUTDOWN 1
-
-
-struct request_header {
-    char method[10];
-    char uri[1024];
-    char http_version[32];
-    char headers[100][2][1024];
-    int headers_len;
-};
-
-struct response_header {
-    char http_version[32];
-    char content_type[64];
-    unsigned long long content_length;
-    char connection[64];
-    char server[64];
-    int status;
-    char status_desc[64];
-};
-
-
-struct mimedict {
-    char extension[8];
-    char content_type[128];
-};
-
-struct DefaultReqFile {
-    char request_file_404[PATH_MAX];
-    char request_file_403[PATH_MAX];
-    char request_file_405[PATH_MAX];
-};
-
-
-struct connConf {
-    int connMaxTransactions;
-};
-
-struct connInfo {
-    int connTransactions;
-    int connFd;
-    int localFileFd;
-    char * recv_buf;
-    unsigned int sessionStatus;
-    unsigned int sessionRShutdown;
-    unsigned int sessionRcvData;
-};
+#include "main.h"
+#include "handle_config.h"
 
 
 
 
-struct runParams {
-    struct connInfo * conninfo;
-    const struct DefaultReqFile * default_request_file;
-    char * file_index[2];
-    char * method_allow[3];
-    unsigned int method_allow_len;
-    struct mimedict * mimebook;
-    unsigned int mimebook_len;
-    char * doc_root;
-    struct sockaddr_in * client_sockaddr;
-    bool is_https;
-    bool https_ssl_have_conned;
-    SSL * ssl;
-};
-
-
-
-
-
-
-void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mimebook_len);
-
-
-
-void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mimebook_len)
+void get_value_by_header(const char * header, const char * header_key, char * header_value)
 {
-    FILE * fd_mime;
-    const int buffersize = 4096;
-    char line[buffersize];
-    char content_type_temp[128];
-    char extension_temp[EXTENSION_NAME_LENTH];
-    int index_mimebook = 0, index_line_ch, index_extension;
-    bool flag_content_type = true, flag_extension = false;
+    int blank_num = 0;
+    int index = 0;
 
-    if ( (fd_mime = fopen(mime_file, "r") ) == NULL)
-    {
-        printf("open %s failed\n", mime_file);
-        exit(EXIT_FAILURE);
-    }
+    for (index = strlen(header_key) + 1, blank_num = 0; index < strlen(header); index++, blank_num++)
+        if (! isblank(header[index]))
+            break;
+    memcpy(header_value, header + strlen(header_key) + 1 + blank_num, strlen(header) - (strlen(header_key) + 1) );
 
-    while (fgets(line, buffersize - 1, fd_mime) != NULL)
-    {
-        // 每行第一个字符不是字母或者数字的，跳过
-        if (! isalnum(line[0]) )
-            continue;
-
-        // 每行，循环读取每个字符
-        for (index_line_ch = 0, index_extension = 0; index_line_ch < strlen(line); index_line_ch++)
-        {
-            // flag_content_type开关开启时，读取的非空字符存入content_type_temp
-            if (flag_content_type)
-            {
-                // 读到空白字符后，flag_content_type开关关闭
-                if (isblank(line[index_line_ch]) )
-                {
-                    content_type_temp[index_line_ch] = '\0';
-                    flag_content_type = false;
-                }
-                else
-                {
-                    content_type_temp[index_line_ch] = line[index_line_ch];
-                }
-            }
-            else
-            {
-                // flag_extension关闭时，读取到空行，跳过
-                // flag_extension开启时，读取到空行，进行赋值操作
-                if (isblank(line[index_line_ch]) || line[index_line_ch] == ';')
-                {
-                    if (! flag_extension)
-                        continue;
-                    extension_temp[index_extension] = '\0';
-                    if (index_mimebook >= mimebook_len)
-                    {
-                        fprintf(stderr, "mimefile count is more than mimebook_len, now break!\n");
-                        fclose(fd_mime);
-                        return;
-                    }
-                    strcpy(mimebook[index_mimebook].content_type, content_type_temp);
-                    strcpy(mimebook[index_mimebook].extension, extension_temp);
-                    index_mimebook++;
-                    flag_extension = false;
-                    index_extension = 0;
-                    if (line[index_line_ch] == ';')
-                    {
-                        flag_content_type = true;
-                        break;
-                    }
-
-                }
-                else
-                {
-                    extension_temp[index_extension] = line[index_line_ch];
-                    index_extension++;
-                    flag_extension = true;
-                }
-
-            }
-
-        }
-
-    }
-
-
-    fclose(fd_mime);
+    // 最后一个特殊字符'\r'改为'\0'
+    if (header_value[strlen(header_value) - 1] == '\r')
+        header_value[strlen(header_value) - 1] = '\0';
 }
+
+
 
 void * get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [], int mimebook_len,
                                    struct response_header * header_resonse);
@@ -240,56 +82,13 @@ void * get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [],
 }
 
 
-
-int split_str_by_ch(const char *str_ori, int str_ori_len, char ch_split, char str_tgt[][1024], int ch_num);
-// 字符串分割成数组
-// 例如：　10.10.10.10, 10.10.10.2 分割为["10.10.10.10", "10.10.10.2"]
-// 返回生成的数组长度
-int split_str_by_ch(const char *str_ori, int str_ori_len, char ch_split, char str_tgt[][1024], int ch_num)
-{
-    int str_ori_ch_index;
-    int str_index, ch_pos;
-    bool flag = false;
-
-    for (str_ori_ch_index = 0, str_index = 0, ch_pos = 0; str_ori_ch_index < str_ori_len; str_ori_ch_index++)
-    {
-        if (str_index >= ch_num)
-        {
-            str_index = ch_num;
-            return str_index;
-        }
-
-        if (str_ori[str_ori_ch_index] == ch_split)
-        {
-            str_tgt[str_index][ch_pos] = '\0';
-            str_index++;
-            ch_pos = 0;
-            flag = true;
-        }
-        else
-        {
-            // 刚分割的第一个字符是空格的，忽略
-            if (flag)
-                if (isblank(str_ori[str_ori_ch_index]) )
-                    continue;
-            str_tgt[str_index][ch_pos] = str_ori[str_ori_ch_index];
-            ch_pos++;
-            flag = false;
-        }
-    }
-    str_tgt[str_index][ch_pos] = '\0';
-    str_index++;
-
-    return str_index;
-}
-
-
 void parse_header_request(char * headers_recv, struct request_header * headers_request);
+
 void parse_header_request(char * headers_recv, struct request_header * headers_request)
 {
     char line_char_s[4][1024];
     char line_read[1024];
-    int index, temp_index, char_s_count, header_index;
+    int index, temp_index, char_s_count, header_index, header_value_index;
     bool flag = true;
 
     for (index = 0, temp_index = 0, header_index = 0; index < strlen(headers_recv); index++)
@@ -308,15 +107,42 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
                     strcpy(headers_request->http_version, line_char_s[2]);
                     flag = false;
                 }
-            } else
+            }
+            else
             {
                 char_s_count = split_str_by_ch(line_read, strlen(line_read), ':', line_char_s, 4);
                 if (char_s_count == 2)
                 {
                     strcpy(headers_request->headers[header_index][0], line_char_s[0]);
                     strcpy(headers_request->headers[header_index][1], line_char_s[1]);
+
+                    printf("## recv headers: %s#%s\n",
+                           headers_request->headers[header_index][0], headers_request->headers[header_index][1]);
+
+                    if (strcmp(headers_request->headers[header_index][0], "Host") == 0)
+                        strcpy(headers_request->host, headers_request->headers[header_index][1]);
+
                     header_index++;
                 }
+                else if (char_s_count > 2)
+                {
+                    strcpy(headers_request->headers[header_index][0], line_char_s[0]);
+                    get_value_by_header(line_read, headers_request->headers[header_index][0],
+                            headers_request->headers[header_index][1]);
+
+                    printf("## recv headers: %s#%s\n",
+                           headers_request->headers[header_index][0], headers_request->headers[header_index][1]);
+
+                    if (strcmp(headers_request->headers[header_index][0], "Host") == 0)
+                        strcpy(headers_request->host, headers_request->headers[header_index][1]);
+
+                    header_index++;
+                }
+                else
+                {
+                    fprintf(stderr, "recv error header: %s\n", line_read);
+                }
+
             }
 
             temp_index = 0;
@@ -332,6 +158,7 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 
 }
 
+
 void init_session(struct connInfo * connSessionInfo);
 
 void init_session(struct connInfo * connSessionInfo)
@@ -345,12 +172,12 @@ void init_session(struct connInfo * connSessionInfo)
 
 
 
-void process_request_get_header(struct runParams *run_params, char *header_buf, ssize_t buffer_size);
-void process_request_response_header(struct runParams *run_params, char * header_buf, ssize_t buffer_size);
-void process_request_response_data(struct runParams *run_params);
+void process_request_get_header(struct RunParams *run_params, char *header_buf, ssize_t buffer_size);
+void process_request_response_header(struct RunParams *run_params, char * header_buf, ssize_t buffer_size);
+void process_request_response_data(struct RunParams *run_params);
 
 
-void process_request_get_header(struct runParams *run_params, char *header_buf, ssize_t buffer_size)
+void process_request_get_header(struct RunParams *run_params, char *header_buf, ssize_t buffer_size)
 {
     bool header_rcv = false;
     int index;
@@ -362,8 +189,8 @@ void process_request_get_header(struct runParams *run_params, char *header_buf, 
 
     printf("now read data\n");
     printf("connfd: %d\n", run_params->conninfo->connFd);
-    if ( (run_params->is_https) )
-        len = SSL_read(run_params->ssl, read_buffer, buffer_size - (size_t)1);
+    if ( (run_params->conninfo->is_https) )
+        len = SSL_read(run_params->conninfo->ssl, read_buffer, buffer_size - (size_t)1);
     else
         len = read(run_params->conninfo->connFd, read_buffer, buffer_size - (size_t)1);
 
@@ -456,7 +283,8 @@ void process_request_get_header(struct runParams *run_params, char *header_buf, 
 }
 
 
-void process_request_response_header(struct runParams *run_params, char * header_buf, ssize_t buffer_size)
+
+void process_request_response_header(struct RunParams *run_params, char * header_buf, ssize_t buffer_size)
 {
 
     char cli_addr_buff[INET_ADDRSTRLEN];
@@ -465,6 +293,8 @@ void process_request_response_header(struct runParams *run_params, char * header
     int cli_sockaddr_len, srv_sockaddr_len;
     char addr_buf[INET_ADDRSTRLEN];
     int res_io;
+
+    int host_index;
 
     struct response_header header_resonse = {
             .http_version = "HTTP/1.1",
@@ -481,53 +311,50 @@ void process_request_response_header(struct runParams *run_params, char * header
     if (run_params->conninfo->localFileFd == -2)
     {
         struct request_header header_request;
-
         char response[4096];
         char ch_temp[1024];
-
-        parse_header_request(header_buf, &header_request);
-
-        printf("request_uri: %s\n", header_request.uri);
-
         struct stat statbuf;
         char request_file[512];
         int index_temp;
         bool flag_temp;
 
+        parse_header_request(header_buf, &header_request);
+
+        for (host_index = 0; host_index < 2; host_index++)
+            if (strcmp(header_request.host, run_params->hostvar[host_index].host) == 0)
+                run_params->hostvar += host_index;
 
         flag_temp = false;
-        for (index_temp = 0; index_temp < 3; index_temp++)
-        {
-            printf("method: %s   %s\n", run_params->method_allow[index_temp], header_request.method);
-
-
-            if (strcmp(run_params->method_allow[index_temp], header_request.method) == 0)
+        for (index_temp = 0; index_temp < run_params->hostvar->method_allowed_len; index_temp++)
+            if (strcmp(run_params->hostvar->method_allowed[index_temp], header_request.method) == 0)
+            {
                 flag_temp = true;
-        }
+                break;
+            }
 
         if (str_endwith(header_request.uri, ".php"))
         {
-            sprintf(request_file, "%s/%s", run_params->doc_root, header_request.uri);
+            sprintf(request_file, "%s/%s", run_params->hostvar->doc_root, header_request.uri);
             is_fastcgi = true;
         }
         else if (!flag_temp)
         {
             SET_RESPONSE_STATUS_405(header_resonse);
-            strcpy(request_file, run_params->default_request_file->request_file_405);
+            strcpy(request_file, run_params->hostvar->request_file_405);
         }
         else if (strcmp(header_request.method, "GET") == 0)
         {
             // 访问的uri是目录的，重写到该目录下的index文件
             if (header_request.uri[strlen(header_request.uri) - 1] == '/')
             {
-                sprintf(request_file, "%s/%s%s", run_params->doc_root, header_request.uri, run_params->file_index[0]);
+                sprintf(request_file, "%s/%s%s", run_params->hostvar->doc_root, header_request.uri, run_params->hostvar->file_indexs[0]);
                 if (access(request_file, F_OK) == -1)
                 {
-                    sprintf(request_file, "%s/%s%s", run_params->doc_root, header_request.uri, run_params->file_index[1]);
+                    sprintf(request_file, "%s/%s%s", run_params->hostvar->doc_root, header_request.uri, run_params->hostvar->file_indexs[1]);
                     if (access(request_file, F_OK) == -1)
                     {
                         SET_RESPONSE_STATUS_403(header_resonse);
-                        strcpy(request_file, run_params->default_request_file->request_file_403);
+                        strcpy(request_file, run_params->hostvar->request_file_403);
                     }
                     else
                     SET_RESPONSE_STATUS_200(header_resonse);
@@ -537,7 +364,7 @@ void process_request_response_header(struct runParams *run_params, char * header
             }
             else
             {
-                sprintf(request_file, "%s/%s", run_params->doc_root, header_request.uri);
+                sprintf(request_file, "%s/%s", run_params->hostvar->doc_root, header_request.uri);
 
                 printf("request_file: %s\n", request_file);
                 // 根据文件是否存在，重新拼接请求文件，生成状态码
@@ -552,14 +379,14 @@ void process_request_response_header(struct runParams *run_params, char * header
                             SET_RESPONSE_STATUS_200(header_resonse);
                         } else {
                             SET_RESPONSE_STATUS_404(header_resonse);
-                            strcpy(request_file, run_params->default_request_file->request_file_404);
+                            strcpy(request_file, run_params->hostvar->request_file_404);
                         }
                     }
                     else
                     {
                         printf("get file %s stat error\n", request_file);
                         SET_RESPONSE_STATUS_403(header_resonse);
-                        strcpy(request_file, run_params->default_request_file->request_file_403);
+                        strcpy(request_file, run_params->hostvar->request_file_403);
                     }
 
                 }
@@ -567,7 +394,7 @@ void process_request_response_header(struct runParams *run_params, char * header
                 else
                 {
                     SET_RESPONSE_STATUS_404(header_resonse);
-                    strcpy(request_file, run_params->default_request_file->request_file_404);
+                    strcpy(request_file, run_params->hostvar->request_file_404);
                 }
 
                 printf("request_file: %s\n", request_file);
@@ -588,6 +415,9 @@ void process_request_response_header(struct runParams *run_params, char * header
         }
         else
         {
+            printf("request_file: %s\n", request_file);
+
+
             if (stat(request_file, &statbuf) != -1)
                 header_resonse.content_length = statbuf.st_size;
             else
@@ -604,7 +434,7 @@ void process_request_response_header(struct runParams *run_params, char * header
                 fprintf(stderr, "open file %s error!\n", request_file);
                 // exit(EXIT_FAILURE);
                 SET_RESPONSE_STATUS_403(header_resonse);
-                strcpy(request_file, run_params->default_request_file->request_file_403);
+                strcpy(request_file, run_params->hostvar->request_file_403);
                 // if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
                 if ((run_params->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0)
                 {
@@ -615,7 +445,7 @@ void process_request_response_header(struct runParams *run_params, char * header
             }
 
 
-            get_contenttype_by_filepath(request_file, run_params->mimebook, run_params->mimebook_len, &header_resonse);
+            get_contenttype_by_filepath(request_file, run_params->hostvar->mimebook, MAX_MIMEBOOK_SIZE, &header_resonse);
 
             printf("begine send\n");
 
@@ -658,8 +488,8 @@ void process_request_response_header(struct runParams *run_params, char * header
 
 
             // 发送响应头信息
-            if (run_params->is_https)
-                res_io = SSL_write(run_params->ssl, response, strlen(response));
+            if (run_params->conninfo->is_https)
+                res_io = SSL_write(run_params->conninfo->ssl, response, strlen(response));
             else
                 res_io = writen(run_params->conninfo->connFd, response, strlen(response));
 
@@ -690,7 +520,7 @@ void process_request_response_header(struct runParams *run_params, char * header
 }
 
 
-void process_request_response_data(struct runParams *run_params)
+void process_request_response_data(struct RunParams *run_params)
 {
     ssize_t buffer_size = 4096, read_buffer_size;
     char send_buffer[buffer_size];
@@ -700,8 +530,8 @@ void process_request_response_data(struct runParams *run_params)
 
     if ( (read_buffer_size = read(run_params->conninfo->localFileFd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
     {
-        if (run_params->is_https)
-            res_io = SSL_write(run_params->ssl, send_buffer, read_buffer_size);
+        if (run_params->conninfo->is_https)
+            res_io = SSL_write(run_params->conninfo->ssl, send_buffer, read_buffer_size);
         else
             res_io = writen(run_params->conninfo->connFd, send_buffer, read_buffer_size);
 
@@ -764,10 +594,10 @@ void process_request_response_data(struct runParams *run_params)
 
 
 
-void process_request(struct runParams * run_params);
+void process_request(struct RunParams * run_params);
 
 
-void process_request(struct runParams * run_params)
+void process_request(struct RunParams * run_params)
 {
     ssize_t buffer_size = 4096;
     char header_buf[buffer_size];
@@ -797,7 +627,6 @@ void process_request(struct runParams * run_params)
 
 
 int create_listen_sock(int port, struct sockaddr_in * server_sockaddr);
-
 
 int create_listen_sock(int port, struct sockaddr_in * server_sockaddr)
 {
@@ -881,6 +710,8 @@ void configure_context_ssl(SSL_CTX * ctx)
 }
 
 
+
+
 int main() {
     int http_listen_fd, https_listen_fd, connfd, tmpConnFd, cli_len;
     struct sockaddr_in client_sockaddr, http_server_sockaddr, https_server_sockaddr;
@@ -893,64 +724,23 @@ int main() {
     ctx = create_context_ssl();
     configure_context_ssl(ctx);
 
-
     // epoll
     struct epoll_event event;
     struct epoll_event * events;
     uint32_t tmpEvent;
     int epoll_fd, ep_fd_ready_count, ep_fd_index;
-    const int mimebook_len = 103;
-
-    struct mimedict mimebook[mimebook_len];
-
 
     struct connConf connConfLimit;
-
     struct connInfo * connSessionInfos;
+    struct RunParams run_param[MAX_EPOLL_SIZE];
 
-
-
-    // 运行的配置参数
-    char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
-    // char * doc_root = "/opt/application/nginx/myphp";
-    char * file_index[2] = {"index.html", "index.htm"};
-    char * method_allow[3] = {"GET", "DELETE", "POST"};
-    char mime_file[PATH_MAX] = "/home/liushan/mylab/clang/dagama/mime.types";
-    struct DefaultReqFile request_file_default = {
-            .request_file_404 = "/home/liushan/mylab/clang/dagama/webroot/html/404.html",
-            .request_file_403 = "/home/liushan/mylab/clang/dagama/webroot/html/403.html",
-            .request_file_405 = "/home/liushan/mylab/clang/dagama/webroot/html/405.html"
-    };
-
-
-    struct runParams run_param[MAX_EPOLL_SIZE];
-
-    get_mimebook(mime_file, mimebook, mimebook_len);
-
-
-    for (index = 0; index < MAX_EPOLL_SIZE; index++)
-    {
-        run_param[index].default_request_file = &request_file_default;
-        for (index2 = 0; index2 < sizeof(file_index) / sizeof(char *); index2++)
-            run_param[index].file_index[index2] = file_index[index2];
-
-        for (index2 = 0; index2 < sizeof(method_allow) / sizeof(char *); index2++)
-            run_param[index].method_allow[index2] = method_allow[index2];
-        run_param->method_allow_len = sizeof(method_allow) / sizeof(char *);
-        run_param[index].mimebook = mimebook;
-        run_param[index].mimebook_len = mimebook_len;
-        run_param[index].doc_root = doc_root;
-        run_param[index].client_sockaddr = &client_sockaddr;
-        run_param[index].is_https = false;
-        run_param[index].https_ssl_have_conned = false;
-        run_param[index].ssl = NULL;
-    }
-
-
+    struct hostVar * host_var_ptr;
+    int host_num = get_config_host_num();
+    host_var_ptr = malloc(sizeof(struct hostVar) * host_num);
+    init_config(host_var_ptr, host_num);
 
     http_listen_fd = create_listen_sock(8080, &http_server_sockaddr);
     https_listen_fd = create_listen_sock(8043, &https_server_sockaddr);
-
 
     epoll_fd = epoll_create(MAX_EPOLL_SIZE);
     if (epoll_fd == -1)
@@ -958,7 +748,6 @@ int main() {
         printf("epoll_create error\n");
         exit(EXIT_FAILURE);
     }
-
 
     // https_listen http_listen 加入event
     event.data.fd = http_listen_fd;
@@ -977,10 +766,7 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-
-
     events = malloc(MAX_EPOLL_SIZE * sizeof(event) );
-
 
     while(1)
     {
@@ -1039,6 +825,11 @@ int main() {
                     connSessionInfos->connFd = connfd;
                     connSessionInfos->connTransactions = 0;
                     run_param[connfd].conninfo = connSessionInfos;
+
+                    run_param[connfd].conninfo->is_https = false;
+                    run_param[connfd].conninfo->https_ssl_have_conned = false;
+                    run_param[connfd].hostvar = host_var_ptr;
+                    run_param[connfd].client_sockaddr = &client_sockaddr;
                 }
             }
             else if (tmpConnFd == https_listen_fd)
@@ -1066,9 +857,6 @@ int main() {
 
                     }
 
-
-
-
                     memset(&event, 0, sizeof(event));
 
                     event.data.fd = connfd;
@@ -1090,28 +878,18 @@ int main() {
                     connSessionInfos->connTransactions = 0;
                     run_param[connfd].conninfo = connSessionInfos;
 
+                    run_param[connfd].conninfo->is_https = true;
+                    run_param[connfd].conninfo->https_ssl_have_conned = false;
+                    run_param[connfd].hostvar = host_var_ptr;
+                    run_param[connfd].client_sockaddr = &client_sockaddr;
 
-                    run_param[connfd].is_https = true;
-                    run_param[connfd].https_ssl_have_conned = false;
+                    printf("run_param[connfd].hostvar: %s %s\n",
+                            run_param[connfd].hostvar->host, run_param[connfd].hostvar->doc_root);
 
 
                     SSL * ssl;
                     ssl = SSL_new(ctx);
                     SSL_set_fd(ssl, connfd);
-
-                    if (SSL_accept(ssl) <= 0)
-                    {
-                        printf("#1 ssl accept error errno: %d\n", errno);
-                        exit(EXIT_FAILURE);
-                    }
-                    else
-                    {
-                        printf("#1 ssl established %d\n", tmpConnFd);
-                        run_param[connfd].https_ssl_have_conned = true;
-                        run_param[connfd].ssl = ssl;
-                    }
-
-
                 }
             }
             else if (tmpConnFd >= 5)
@@ -1120,22 +898,38 @@ int main() {
                 if (tmpEvent & EPOLLIN)
                 {
                     // https访问ssl未建立连接
-                    if (run_param[tmpConnFd].is_https && (! run_param[tmpConnFd].https_ssl_have_conned) )
+                    if (run_param[tmpConnFd].conninfo->is_https &&
+                    (! run_param[tmpConnFd].conninfo->https_ssl_have_conned)
+                    )
                     {
                         SSL * ssl;
                         ssl = SSL_new(ctx);
                         SSL_set_fd(ssl, tmpConnFd);
 
+
+
                         if (SSL_accept(ssl) <= 0)
                         {
                             printf("#2 ssl accept error errno: %d\n", errno);
-                            exit(EXIT_FAILURE);
+                            if (run_param[tmpConnFd].conninfo->https_ssl_have_conned)
+                            {
+                                printf("run_param[tmpConnFd].https_ssl_have_conned): true\n");
+                                printf("tmpConnFd: %d\n", tmpConnFd);
+
+                            }
+                            else
+                            {
+                                printf("run_param[tmpConnFd].https_ssl_have_conned): false\n");
+                                printf("tmpConnFd: %d\n", tmpConnFd);
+                            }
+
+                            close(tmpConnFd);
                         }
                         else
                         {
                             printf("ssl established %d\n", tmpConnFd);
-                            run_param[tmpConnFd].https_ssl_have_conned = true;
-                            run_param[tmpConnFd].ssl = ssl;
+                            run_param[tmpConnFd].conninfo->https_ssl_have_conned = true;
+                            run_param[tmpConnFd].conninfo->ssl = ssl;
                         }
                     }
                     else
