@@ -86,7 +86,7 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 
 void parse_header_request(char * headers_recv, struct request_header * headers_request)
 {
-    char line_char_s[4][1024];
+    char line_char_s[4][MAX_STR_SPLIT_SIZE];
     char line_read[1024];
     int index, temp_index, char_s_count, header_index, header_value_index;
     bool flag = true;
@@ -99,7 +99,7 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 
             if (flag)
             {
-                char_s_count = split_str_by_ch(line_read, strlen(line_read), ' ', line_char_s, 4);
+                char_s_count = str_split(line_read, ' ', line_char_s, 4);
                 if (char_s_count == 3)
                 {
                     strcpy(headers_request->method, line_char_s[0]);
@@ -110,7 +110,7 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
             }
             else
             {
-                char_s_count = split_str_by_ch(line_read, strlen(line_read), ':', line_char_s, 4);
+                char_s_count = str_split(line_read, ':', line_char_s, 4);
                 if (char_s_count == 2)
                 {
                     strcpy(headers_request->headers[header_index][0], line_char_s[0]);
@@ -688,6 +688,7 @@ SSL_CTX * create_context_ssl(void)
     return ctx;
 }
 
+
 void configure_context_ssl(SSL_CTX * ctx)
 {
     char * crt = "/home/liushan/mylab/clang/cert/kubelet_node-4.crt";
@@ -710,9 +711,42 @@ void configure_context_ssl(SSL_CTX * ctx)
 }
 
 
+void test_module(void);
+
+void test_module(void)
+{
+    char ch_1[10];
+    char ch_2[20];
+    char ch_3[30];
+
+    char ch[56];
+
+    struct liushan {
+        char ch_1[10];
+        char ch_2[20];
+    };
+
+
+    struct dingfan {
+        struct liushan haha[3];
+        int current_key_num;
+    };
+
+
+    struct dingfan shan;
+
+    str_strip(shan.haha[0].ch_1);
+    str_strip(shan.haha[0].ch_2);
+
+   exit(EXIT_SUCCESS);
+}
 
 
 int main() {
+
+    // test_module();
+
+
     int http_listen_fd, https_listen_fd, connfd, tmpConnFd, cli_len;
     struct sockaddr_in client_sockaddr, http_server_sockaddr, https_server_sockaddr;
     int index, index2;
@@ -735,8 +769,14 @@ int main() {
     struct RunParams run_param[MAX_EPOLL_SIZE];
 
     struct hostVar * host_var_ptr;
-    int host_num = get_config_host_num();
+    // TODO just for test
+    int host_num = 3;
+
+    // TODO 把null改回正常值
+    // int host_num = get_config_host_num(NULL);
     host_var_ptr = malloc(sizeof(struct hostVar) * host_num);
+
+
     init_config(host_var_ptr, host_num);
 
     http_listen_fd = create_listen_sock(8080, &http_server_sockaddr);

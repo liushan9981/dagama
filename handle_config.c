@@ -7,9 +7,10 @@
 #include <limits.h>
 #include <ctype.h>
 
+
+#include "myutils.h"
 #include "handle_config.h"
-
-
+#include "mystring.h"
 
 
 void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mimebook_len)
@@ -96,31 +97,99 @@ void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mime
 }
 
 
-int get_config_host_num(void)
+void get_config_host_num(struct config_all_host_kv * all_host_kv)
 {
-    return 2;
+    char line[CONFIG_FILE_LINE_MAX_SIZE];
+    all_host_kv->host_num = 0;
+
+    fseek(all_host_kv->f_config, 0L, SEEK_SET);
+    while (fgets(line, CONFIG_FILE_LINE_MAX_SIZE, all_host_kv->f_config) != NULL)
+        if (str_startwith(line, CONFIG_FILE_KEY_HOST) )
+            all_host_kv->host_num++;
+}
+
+
+void get_all_host_config(struct config_all_host_kv * all_host_kv)
+{
+    char line[CONFIG_FILE_LINE_MAX_SIZE];
+    int host_index = 0, host_key_index = 0;
+    char temp_key_value[2][MAX_STR_SPLIT_SIZE];
+
+    fseek(all_host_kv->f_config, 0L, SEEK_SET);
+    while (fgets(line, CONFIG_FILE_LINE_MAX_SIZE, all_host_kv->f_config) != NULL)
+    {
+        if (str_startwith(line, CONFIG_FILE_LINE_COMMENT_PREFIX) || str_isspace(line) )
+            continue;
+
+        if (str_startwith(line, CONFIG_FILE_CUTOFF_STR) )
+        {
+            host_key_index = 0;
+            host_index++;
+            continue;
+        }
+
+        str_split(line, CONFIG_FILE_LINE_KV_SPLIT_CH, temp_key_value, 2);
+        printf("key %s\n", temp_key_value[0]);
+        printf("value %s", temp_key_value[1]);
+
+
+        strncpy(all_host_kv->host_config_kv[host_index].config_kv[host_key_index].key,
+                temp_key_value[0], strlen(temp_key_value[0]) + 1);
+        strncpy(all_host_kv->host_config_kv[host_index].config_kv[host_key_index].value,
+                temp_key_value[1], strlen(temp_key_value[1]) + 1);
+        host_key_index++;
+        all_host_kv->host_config_kv[host_index].current_key_num = host_key_index;
+
+    }
+
 }
 
 
 
-
-//    // 运行的配置参数
-//    char * doc_root = "/home/liushan/mylab/clang/dagama/webroot";
-//    // char * doc_root = "/opt/application/nginx/myphp";
-//    char * file_index[2] = {"index.html", "index.htm"};
-//    char * method_allow[3] = {"GET", "DELETE", "POST"};
-//
-//    struct DefaultReqFile request_file_default = {
-//            .request_file_404 = "/home/liushan/mylab/clang/dagama/webroot/html/404.html",
-//            .request_file_403 = "/home/liushan/mylab/clang/dagama/webroot/html/403.html",
-//            .request_file_405 = "/home/liushan/mylab/clang/dagama/webroot/html/405.html"
-//    };
-
 void init_config(struct hostVar * host_var_ptr, int num)
 {
+    struct config_all_host_kv all_host_kv;
+
+
+    if ( (all_host_kv.f_config = fopen("/home/liushan/mylab/clang/dagama/conf/dagama.conf", "r") ) == NULL)
+        err_exit("can't open config file\n");
+
+    get_config_host_num(&all_host_kv);
+    printf("host_num: %d\n", all_host_kv.host_num);
+    all_host_kv.host_config_kv = (struct config_host_kv *) malloc(sizeof(struct config_host_kv) * all_host_kv.host_num);
+
+    get_all_host_config(&all_host_kv);
+
+
+
+
+    int tmp_index_host, tmp_index_key;
+
+    for (tmp_index_host = 0; tmp_index_host < all_host_kv.host_num; tmp_index_host++)
+    {
+        printf("# Host: %d\n", tmp_index_host);
+        for (tmp_index_key = 0; tmp_index_key < all_host_kv.host_config_kv[tmp_index_host].current_key_num; tmp_index_key++)
+        {
+            str_strip(all_host_kv.host_config_kv[tmp_index_host].config_kv[tmp_index_key].value);
+            printf("key-> %s        value-> %s\n",
+                   all_host_kv.host_config_kv[tmp_index_host].config_kv[tmp_index_key].key,
+                   all_host_kv.host_config_kv[tmp_index_host].config_kv[tmp_index_key].value
+            );
+        }
+
+    }
+
+
+    printf("%d %d  %d\n", all_host_kv.host_config_kv[0].current_key_num,
+            all_host_kv.host_config_kv[1].current_key_num,
+            all_host_kv.host_config_kv[2].current_key_num);
+
+    printf("%s     %s\n", all_host_kv.host_config_kv[2].config_kv[3].key, all_host_kv.host_config_kv[2].config_kv[3].value);
+
+    exit(EXIT_SUCCESS);
+
+
     char mime_file[PATH_MAX] = "/home/liushan/mylab/clang/dagama/mime.types";
-
-
     strncpy(host_var_ptr[0].host, "192.168.123.173:8043", PATH_MAX);
     strncpy(host_var_ptr[0].doc_root, "/home/liushan/mylab/clang/dagama/webroot", PATH_MAX);
 
