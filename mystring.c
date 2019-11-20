@@ -86,6 +86,32 @@ bool str_isspace(const char * str)
 }
 
 
+char * str_join(char * ch_split, int split_len,
+                char str_ori[][MAX_STR_SPLIT_SIZE], int ch_num, char * str_tgt, int str_tgt_len)
+{
+    long sum_len;
+    int str_ori_index;
+
+    sum_len = (ch_num * MAX_STR_SPLIT_SIZE) - ch_num + 1 + (ch_num - 1) * split_len;
+    if (sum_len < str_tgt_len)
+        return NULL;
+
+    str_tgt[0] = '\0';
+    for (str_ori_index = 1; str_ori_index < ch_num; str_ori_index++)
+    {
+        if (strlen(str_ori[str_ori_index]) > 0)
+        {
+            strncat(str_tgt, str_ori[str_ori_index], strlen(str_ori[str_ori_index]) );
+            strncat(str_tgt, ch_split, strlen(ch_split) );
+        }
+    }
+
+    str_tgt[strlen(str_tgt) - strlen(ch_split)] = '\0';
+
+    return str_tgt;
+}
+
+
 int str_split(const char *str_ori, char ch_split, char str_tgt[][MAX_STR_SPLIT_SIZE], int ch_num)
 {
     int str_ori_ch_index;

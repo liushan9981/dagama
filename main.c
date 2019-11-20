@@ -27,8 +27,7 @@
 
 #include "main.h"
 #include "handle_config.h"
-
-
+#include "myutils.h"
 
 
 void get_value_by_header(const char * header, const char * header_key, char * header_value)
@@ -321,9 +320,14 @@ void process_request_response_header(struct RunParams *run_params, char * header
         parse_header_request(header_buf, &header_request);
 
         for (host_index = 0; host_index < 2; host_index++)
+        {
+            printf("debug hostname:\n#%s#\n#%s#\n", header_request.host, run_params->hostvar[host_index].host);
             if (strcmp(header_request.host, run_params->hostvar[host_index].host) == 0)
                 run_params->hostvar += host_index;
+        }
 
+
+        printf("debug2: docroot:%s\n", run_params->hostvar->doc_root);
         flag_temp = false;
         for (index_temp = 0; index_temp < run_params->hostvar->method_allowed_len; index_temp++)
             if (strcmp(run_params->hostvar->method_allowed[index_temp], header_request.method) == 0)
@@ -711,40 +715,75 @@ void configure_context_ssl(SSL_CTX * ctx)
 }
 
 
-void test_module(void);
-
-void test_module(void)
+void get_app_cwdir(int argc, char ** argv, char * app_cwdir)
 {
-    char ch_1[10];
-    char ch_2[20];
-    char ch_3[30];
+    char temp_key_value[128][MAX_STR_SPLIT_SIZE];
+    char dest_path[PATH_MAX], cw_dir[PATH_MAX];
+    char * join_str = "/";
+    int str_split_num;
 
-    char ch[56];
+    // 获取程序的绝对路径
+    if (str_startwith(argv[0], join_str) )
+        strncpy(dest_path, argv[0], strlen(argv[0]) );
+    else
+    {
+        if (getcwd(cw_dir, PATH_MAX) == NULL)
+            err_exit("getcwd() error\n");
+        strncpy(dest_path, cw_dir, MAX_STR_SPLIT_SIZE);
+        strncat(dest_path, join_str, strlen(join_str) );
+        strncat(dest_path, argv[0], strlen(argv[0]) );
+    }
 
-    struct liushan {
-        char ch_1[10];
-        char ch_2[20];
-    };
+    // 去掉末尾的文件名
+    str_split_num = str_split(dest_path, '/', temp_key_value, 128);
+    str_join(join_str, strlen(join_str), temp_key_value, str_split_num - 1, dest_path, MAX_STR_SPLIT_SIZE);
 
-
-    struct dingfan {
-        struct liushan haha[3];
-        int current_key_num;
-    };
-
-
-    struct dingfan shan;
-
-    str_strip(shan.haha[0].ch_1);
-    str_strip(shan.haha[0].ch_2);
-
-   exit(EXIT_SUCCESS);
+    strncpy(app_cwdir, join_str, MAX_STR_SPLIT_SIZE);
+    strncat(app_cwdir, dest_path, strlen(dest_path) );
 }
 
 
-int main() {
 
-    // test_module();
+void get_config_file_path(int argc, char ** argv, char * config_file_path);
+
+void get_config_file_path(int argc, char ** argv, char * config_file_path)
+{
+    char dest_path2[PATH_MAX];
+    char * join_str = "/";
+    char app_cwdir[PATH_MAX];
+
+    // 后面跟参数的，认为是文件路径，覆盖默认的地址
+    if (argc > 1)
+        strncpy(config_file_path, argv[1], PATH_MAX);
+
+    // 如果路径是绝对路径，直接返回
+    if (str_startwith(config_file_path, join_str) )
+        return;
+
+    get_app_cwdir(argc, argv, app_cwdir);
+
+    strncpy(dest_path2, app_cwdir, PATH_MAX);
+    strncat(dest_path2, join_str, strlen(join_str) );
+    strncat(dest_path2, config_file_path, strlen(config_file_path) );
+
+    strncpy(config_file_path, dest_path2, PATH_MAX);
+}
+
+
+void test_module(int argc, char ** argv);
+
+void test_module(int argc, char ** argv)
+{
+
+
+    exit(EXIT_SUCCESS);
+}
+
+
+int main(int argc, char ** argv) {
+
+    // test_module(argc, argv);
+
 
 
     int http_listen_fd, https_listen_fd, connfd, tmpConnFd, cli_len;
@@ -769,15 +808,16 @@ int main() {
     struct RunParams run_param[MAX_EPOLL_SIZE];
 
     struct hostVar * host_var_ptr;
-    // TODO just for test
-    int host_num = 3;
+    char config_file_path[PATH_MAX] = "../conf/dagama.conf";
+    int host_num_count;
 
-    // TODO 把null改回正常值
-    // int host_num = get_config_host_num(NULL);
-    host_var_ptr = malloc(sizeof(struct hostVar) * host_num);
+    get_config_file_path(argc, argv, config_file_path);
+    printf("config_file_path: %s\n", config_file_path);
+    host_num_count = get_config_host_num(config_file_path);
 
+    host_var_ptr = malloc(sizeof(struct hostVar) * host_num_count);
 
-    init_config(host_var_ptr, host_num);
+    init_config(host_var_ptr, config_file_path);
 
     http_listen_fd = create_listen_sock(8080, &http_server_sockaddr);
     https_listen_fd = create_listen_sock(8043, &https_server_sockaddr);

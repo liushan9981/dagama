@@ -24,6 +24,7 @@ int str_strip(char * str);
 // 例如：　10.10.10.10, 10.10.10.2 分割为["10.10.10.10", "10.10.10.2"]
 // 返回生成的数组长度
 int str_split(const char *str_ori, char ch_split, char str_tgt[][MAX_STR_SPLIT_SIZE], int ch_num);
-
+char * str_join(char * ch_split, int split_len,
+                char str_ori[][MAX_STR_SPLIT_SIZE], int ch_num, char * str_tgt, int str_tgt_len);
 
 #endif //DAGAMA_TOOL_H

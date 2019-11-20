@@ -7,10 +7,27 @@
 #include <limits.h>
 #include <ctype.h>
 
-
+#include "main.h"
 #include "myutils.h"
 #include "handle_config.h"
 #include "mystring.h"
+
+
+
+bool get_value_by_key(struct config_key_value * config_kv_ptr, char * * ch, int num)
+{
+    int index;
+
+    for (index = 0; index < num; index++)
+        if (strcmp(config_kv_ptr[index].key, *ch) == 0)
+        {
+            *ch = config_kv_ptr[index].value;
+            return true;
+        }
+
+    return false;
+}
+
 
 
 void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mimebook_len)
@@ -97,26 +114,43 @@ void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mime
 }
 
 
-void get_config_host_num(struct config_all_host_kv * all_host_kv)
+int get_config_host_num(const char * config_file_path)
 {
     char line[CONFIG_FILE_LINE_MAX_SIZE];
-    all_host_kv->host_num = 0;
+    char host_key_pre[CONFIG_FILE_LINE_MAX_SIZE];
+    FILE * f;
+    int host_num_count = 0;
 
-    fseek(all_host_kv->f_config, 0L, SEEK_SET);
-    while (fgets(line, CONFIG_FILE_LINE_MAX_SIZE, all_host_kv->f_config) != NULL)
+    strncpy(host_key_pre, CONFIG_FILE_KEY_HOST, CONFIG_FILE_LINE_MAX_SIZE);
+    strncat(host_key_pre, ":", CONFIG_FILE_LINE_MAX_SIZE - strlen(host_key_pre) );
+
+    printf("host_key_pre: %s\n", host_key_pre);
+
+    if ( (f = fopen(config_file_path, "r") ) == NULL)
+        err_exit("can't open config file\n");
+
+
+    while (fgets(line, CONFIG_FILE_LINE_MAX_SIZE, f) != NULL)
         if (str_startwith(line, CONFIG_FILE_KEY_HOST) )
-            all_host_kv->host_num++;
+            host_num_count++;
+
+    fclose(f);
+
+    return host_num_count;
 }
 
 
 void get_all_host_config(struct config_all_host_kv * all_host_kv)
 {
     char line[CONFIG_FILE_LINE_MAX_SIZE];
-    int host_index = 0, host_key_index = 0;
-    char temp_key_value[2][MAX_STR_SPLIT_SIZE];
+    int host_index = 0, host_key_index = 0, splited_num;
+    char temp_key_value[128][MAX_STR_SPLIT_SIZE];
+    FILE * f;
 
-    fseek(all_host_kv->f_config, 0L, SEEK_SET);
-    while (fgets(line, CONFIG_FILE_LINE_MAX_SIZE, all_host_kv->f_config) != NULL)
+    if ( (f = fopen(all_host_kv->config_file_path, "r") ) == NULL)
+        err_exit("can't open config file\n");
+
+    while (fgets(line, CONFIG_FILE_LINE_MAX_SIZE, f) != NULL)
     {
         if (str_startwith(line, CONFIG_FILE_LINE_COMMENT_PREFIX) || str_isspace(line) )
             continue;
@@ -128,110 +162,221 @@ void get_all_host_config(struct config_all_host_kv * all_host_kv)
             continue;
         }
 
-        str_split(line, CONFIG_FILE_LINE_KV_SPLIT_CH, temp_key_value, 2);
-        printf("key %s\n", temp_key_value[0]);
-        printf("value %s", temp_key_value[1]);
-
-
+        splited_num = str_split(line, CONFIG_FILE_LINE_KV_SPLIT_CH, temp_key_value, 128);
         strncpy(all_host_kv->host_config_kv[host_index].config_kv[host_key_index].key,
                 temp_key_value[0], strlen(temp_key_value[0]) + 1);
-        strncpy(all_host_kv->host_config_kv[host_index].config_kv[host_key_index].value,
-                temp_key_value[1], strlen(temp_key_value[1]) + 1);
+        if (splited_num == 2)
+            strncpy(all_host_kv->host_config_kv[host_index].config_kv[host_key_index].value,
+                    temp_key_value[1], strlen(temp_key_value[1]) + 1);
+        else if (splited_num > 2)
+            strncpy(all_host_kv->host_config_kv[host_index].config_kv[host_key_index].value,
+                    line + strlen(temp_key_value[0]) + 1, CONFIG_FILE_LINE_MAX_SIZE);
+        else
+        {
+            fprintf(stderr, "parse config file error, line: %s\n", line);
+            err_exit("now exit\n");
+        }
+
         host_key_index++;
         all_host_kv->host_config_kv[host_index].current_key_num = host_key_index;
+    }
+}
+
+
+void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar * host_var_ptr)
+{
+    int tmp_index_host, tmp_len, tmp_split_index;
+    char * tmp_key, * tmp_value;
+    struct hostVar * cur_host_var_ptr;
+    struct config_host_kv * cur_config_host_kv_ptr;
+    char temp_splited_value[1024][MAX_STR_SPLIT_SIZE];
+    char * tmp_str, * ori_ptr;
+
+    ori_ptr = malloc(sizeof(char) * CONFIG_FILE_LINE_MAX_SIZE);
+    tmp_str = ori_ptr;
+
+    for (tmp_index_host = 0; tmp_index_host < all_host_kv->host_num; tmp_index_host++)
+    {
+        cur_host_var_ptr = host_var_ptr + tmp_index_host;
+        cur_config_host_kv_ptr = all_host_kv->host_config_kv + tmp_index_host;
+
+        printf("# Host: %d\n", tmp_index_host);
+
+        strncpy(tmp_str, CONFIG_FILE_KEY_HOST, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        strncpy(cur_host_var_ptr->host, tmp_str, PATH_MAX);
+        str_strip(cur_host_var_ptr->host);
+
+        printf("host: %s\n", cur_host_var_ptr->host);
+
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_DOCROOT, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        strncpy(cur_host_var_ptr->doc_root, tmp_str, PATH_MAX);
+        str_strip(cur_host_var_ptr->doc_root);
+
+        printf("doc root: %s\n", cur_host_var_ptr->doc_root);
+
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_MIMEFILE, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        str_strip(tmp_str);
+        printf("mime file: %s\n", tmp_str);
+        get_mimebook(tmp_str, cur_host_var_ptr->mimebook, MAX_MIMEBOOK_SIZE);
+
+        printf("mimebook %s %s\n", cur_host_var_ptr->mimebook[2].extension,cur_host_var_ptr->mimebook[2].content_type);
+
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_METHOD_ALLOWED, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+
+        cur_host_var_ptr->method_allowed_len = str_split(tmp_str, CONFIG_FILE_ITEM_SPLIT_CH, temp_splited_value, 1024);
+        for (tmp_split_index = 0; tmp_split_index < cur_host_var_ptr->method_allowed_len; tmp_split_index++)
+        {
+            str_strip(temp_splited_value[tmp_split_index]);
+            strncpy(cur_host_var_ptr->method_allowed[tmp_split_index], temp_splited_value[tmp_split_index],
+                    MAX_HEADER_METHOD_ALLOW_SIZE);
+        }
+
+
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_INDEX_FILE, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        cur_host_var_ptr->file_indexs_len = str_split(tmp_str, CONFIG_FILE_ITEM_SPLIT_CH, temp_splited_value, 1024);
+        for (tmp_split_index = 0; tmp_split_index < cur_host_var_ptr->file_indexs_len; tmp_split_index++)
+        {
+            str_strip(temp_splited_value[tmp_split_index]);
+            strncpy(cur_host_var_ptr->file_indexs[tmp_split_index], temp_splited_value[tmp_split_index], PATH_MAX);
+        }
+
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_403PAGE, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        strncpy(cur_host_var_ptr->request_file_403, tmp_str, PATH_MAX);
+        str_strip(cur_host_var_ptr->request_file_403);
+
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_404PAGE, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        strncpy(cur_host_var_ptr->request_file_404, tmp_str, PATH_MAX);
+        str_strip(cur_host_var_ptr->request_file_404);
+
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_405PAGE, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        strncpy(cur_host_var_ptr->request_file_405, tmp_str, PATH_MAX);
+        str_strip(cur_host_var_ptr->request_file_405);
 
     }
 
 }
 
 
-
-void init_config(struct hostVar * host_var_ptr, int num)
+void init_config(struct hostVar * host_var_ptr, char * config_file_path)
 {
     struct config_all_host_kv all_host_kv;
 
 
-    if ( (all_host_kv.f_config = fopen("/home/liushan/mylab/clang/dagama/conf/dagama.conf", "r") ) == NULL)
-        err_exit("can't open config file\n");
+    strncpy(all_host_kv.config_file_path, config_file_path, PATH_MAX);
 
-    get_config_host_num(&all_host_kv);
+    all_host_kv.host_num = get_config_host_num(config_file_path);
     printf("host_num: %d\n", all_host_kv.host_num);
     all_host_kv.host_config_kv = (struct config_host_kv *) malloc(sizeof(struct config_host_kv) * all_host_kv.host_num);
 
     get_all_host_config(&all_host_kv);
+    set_host_config(&all_host_kv, host_var_ptr);
 
-
-
-
-    int tmp_index_host, tmp_index_key;
-
-    for (tmp_index_host = 0; tmp_index_host < all_host_kv.host_num; tmp_index_host++)
+    int index, index2;
+    printf("----------------\n");
+    for (index = 0; index < 3; index++)
     {
-        printf("# Host: %d\n", tmp_index_host);
-        for (tmp_index_key = 0; tmp_index_key < all_host_kv.host_config_kv[tmp_index_host].current_key_num; tmp_index_key++)
+        printf("host: %s\n", host_var_ptr[index].host);
+        printf("doc root: %s\n", host_var_ptr[index].doc_root);
+        printf("mimebook: %s %s\n", host_var_ptr[index].mimebook[5].extension,
+                host_var_ptr[index].mimebook[5].content_type);
+        for (index2 = 0; index2 < host_var_ptr[index].file_indexs_len; index2++)
         {
-            str_strip(all_host_kv.host_config_kv[tmp_index_host].config_kv[tmp_index_key].value);
-            printf("key-> %s        value-> %s\n",
-                   all_host_kv.host_config_kv[tmp_index_host].config_kv[tmp_index_key].key,
-                   all_host_kv.host_config_kv[tmp_index_host].config_kv[tmp_index_key].value
-            );
+            printf("index:%s\n",host_var_ptr[index].file_indexs[index2]);
         }
+
+        for (index2 = 0; index2 < host_var_ptr[index].method_allowed_len; index2++)
+            printf("method allowed:%s\n", host_var_ptr[index].method_allowed[index2]);
+        printf("403:%s\n", host_var_ptr[index].request_file_403);
+        printf("404:%s\n", host_var_ptr[index].request_file_404);
+        printf("405:%s\n", host_var_ptr[index].request_file_405);
+        printf("*****\n");
 
     }
 
-
-    printf("%d %d  %d\n", all_host_kv.host_config_kv[0].current_key_num,
-            all_host_kv.host_config_kv[1].current_key_num,
-            all_host_kv.host_config_kv[2].current_key_num);
-
-    printf("%s     %s\n", all_host_kv.host_config_kv[2].config_kv[3].key, all_host_kv.host_config_kv[2].config_kv[3].value);
-
-    exit(EXIT_SUCCESS);
-
-
-    char mime_file[PATH_MAX] = "/home/liushan/mylab/clang/dagama/mime.types";
-    strncpy(host_var_ptr[0].host, "192.168.123.173:8043", PATH_MAX);
-    strncpy(host_var_ptr[0].doc_root, "/home/liushan/mylab/clang/dagama/webroot", PATH_MAX);
-
-    strncpy(host_var_ptr[0].file_indexs[0], "index.html", PATH_MAX);
-    strncpy(host_var_ptr[0].file_indexs[1], "index.htm", PATH_MAX);
-    host_var_ptr[0].file_indexs_len = 2;
-
-    strncpy(host_var_ptr[0].method_allowed[0], "GET", 8);
-    strncpy(host_var_ptr[0].method_allowed[1], "DELETE", 8);
-    strncpy(host_var_ptr[0].method_allowed[2], "POST", 8);
-    host_var_ptr[0].method_allowed_len = 3;
-
-    strncpy(host_var_ptr[0].request_file_403, "/home/liushan/mylab/clang/dagama/webroot/html/403.html", PATH_MAX);
-    strncpy(host_var_ptr[0].request_file_404, "/home/liushan/mylab/clang/dagama/webroot/html/404.html", PATH_MAX);
-    strncpy(host_var_ptr[0].request_file_405, "/home/liushan/mylab/clang/dagama/webroot/html/405.html", PATH_MAX);
-
-
-    get_mimebook(mime_file, host_var_ptr[0].mimebook, MAX_MIMEBOOK_SIZE);
-
-
-
-    strncpy(host_var_ptr[1].host, "192.168.123.173:8080", PATH_MAX);
-    strncpy(host_var_ptr[1].doc_root, "/home/liushan/mylab/clang/dagama/webroot-2", PATH_MAX);
-
-    strncpy(host_var_ptr[1].file_indexs[0], "index.html", PATH_MAX);
-    strncpy(host_var_ptr[1].file_indexs[1], "index.htm", PATH_MAX);
-    host_var_ptr[1].file_indexs_len = 2;
-
-    strncpy(host_var_ptr[1].method_allowed[0], "GET", 8);
-    strncpy(host_var_ptr[1].method_allowed[1], "DELETE", 8);
-    strncpy(host_var_ptr[1].method_allowed[2], "POST", 8);
-    host_var_ptr[1].method_allowed_len = 3;
-
-    strncpy(host_var_ptr[1].request_file_403, "/home/liushan/mylab/clang/dagama/webroot/html/403.html", PATH_MAX);
-    strncpy(host_var_ptr[1].request_file_404, "/home/liushan/mylab/clang/dagama/webroot/html/404.html", PATH_MAX);
-    strncpy(host_var_ptr[1].request_file_405, "/home/liushan/mylab/clang/dagama/webroot/html/405.html", PATH_MAX);
-
-    get_mimebook(mime_file, host_var_ptr[1].mimebook, MAX_MIMEBOOK_SIZE);
+    // exit(EXIT_SUCCESS);
 
 }
 
 
+
+
+
+
+
+
+//
+//printf("%d %d  %d\n", all_host_kv->host_config_kv[0].current_key_num,
+//all_host_kv->host_config_kv[1].current_key_num,
+//all_host_kv->host_config_kv[2].current_key_num);
+//
+//printf("%s     %s\n", all_host_kv->host_config_kv[2].config_kv[3].key,
+//all_host_kv->host_config_kv[2].config_kv[3].value);
+//
+//printf("test1: %s  %s\n", defalt_config_host_kv.config_kv[2].key, defalt_config_host_kv.config_kv[2].value);
+//
+//
+//char mime_file[PATH_MAX] = "/home/liushan/mylab/clang/dagama/mime.types";
+//strncpy(host_var_ptr[0].host, "192.168.123.173:8043", PATH_MAX);
+//strncpy(host_var_ptr[0].doc_root, "/home/liushan/mylab/clang/dagama/webroot", PATH_MAX);
+//
+//strncpy(host_var_ptr[0].file_indexs[0], "index.html", PATH_MAX);
+//strncpy(host_var_ptr[0].file_indexs[1], "index.htm", PATH_MAX);
+//host_var_ptr[0].file_indexs_len = 2;
+//
+//strncpy(host_var_ptr[0].method_allowed[0], "GET", 8);
+//strncpy(host_var_ptr[0].method_allowed[1], "DELETE", 8);
+//strncpy(host_var_ptr[0].method_allowed[2], "POST", 8);
+//host_var_ptr[0].method_allowed_len = 3;
+//
+//strncpy(host_var_ptr[0].request_file_403, "/home/liushan/mylab/clang/dagama/webroot/html/403.html", PATH_MAX);
+//strncpy(host_var_ptr[0].request_file_404, "/home/liushan/mylab/clang/dagama/webroot/html/404.html", PATH_MAX);
+//strncpy(host_var_ptr[0].request_file_405, "/home/liushan/mylab/clang/dagama/webroot/html/405.html", PATH_MAX);
+//
+//
+//get_mimebook(mime_file, host_var_ptr[0].mimebook, MAX_MIMEBOOK_SIZE);
+//
+//
+//
+//strncpy(host_var_ptr[1].host, "192.168.123.173:8080", PATH_MAX);
+//strncpy(host_var_ptr[1].doc_root, "/home/liushan/mylab/clang/dagama/webroot-2", PATH_MAX);
+//
+//strncpy(host_var_ptr[1].file_indexs[0], "index.html", PATH_MAX);
+//strncpy(host_var_ptr[1].file_indexs[1], "index.htm", PATH_MAX);
+//host_var_ptr[1].file_indexs_len = 2;
+//
+//strncpy(host_var_ptr[1].method_allowed[0], "GET", 8);
+//strncpy(host_var_ptr[1].method_allowed[1], "DELETE", 8);
+//strncpy(host_var_ptr[1].method_allowed[2], "POST", 8);
+//host_var_ptr[1].method_allowed_len = 3;
+//
+//strncpy(host_var_ptr[1].request_file_403, "/home/liushan/mylab/clang/dagama/webroot/html/403.html", PATH_MAX);
+//strncpy(host_var_ptr[1].request_file_404, "/home/liushan/mylab/clang/dagama/webroot/html/404.html", PATH_MAX);
+//strncpy(host_var_ptr[1].request_file_405, "/home/liushan/mylab/clang/dagama/webroot/html/405.html", PATH_MAX);
+//
+//get_mimebook(mime_file, host_var_ptr[1].mimebook, MAX_MIMEBOOK_SIZE);
 
 //void init_host_run_params(struct RunParams * host_run_params_ptr[], struct hostVar * host_var[], int num)
 //{

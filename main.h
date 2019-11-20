@@ -20,6 +20,9 @@
 #define EXTENSION_NAME_LENTH 8
 #define MAX_EPOLL_SIZE 10000
 #define MAX_MIMEBOOK_SIZE 128
+#define MAX_HEADER_METHOD_ALLOW_NUM 8
+#define MAX_HEADER_METHOD_ALLOW_SIZE 8
+#define MAX_HEADER_FILE_INDEX_NUM 16
 
 // 会话的状态
 #define SESSION_READ_HEADER 1
@@ -91,10 +94,10 @@ struct connInfo {
 struct hostVar {
     char host[PATH_MAX];
     char doc_root[PATH_MAX];
-    char file_indexs[16][PATH_MAX];
-    unsigned int file_indexs_len;
-    char method_allowed[8][8];
-    unsigned int method_allowed_len;
+    char file_indexs[MAX_HEADER_FILE_INDEX_NUM][PATH_MAX];
+    int file_indexs_len;
+    char method_allowed[MAX_HEADER_METHOD_ALLOW_NUM][MAX_HEADER_METHOD_ALLOW_SIZE];
+    int method_allowed_len;
     char request_file_403[PATH_MAX];
     char request_file_404[PATH_MAX];
     char request_file_405[PATH_MAX];
