@@ -170,20 +170,39 @@ void init_session(struct connInfo * connSessionInfo)
 }
 
 
+void session_close(struct SessionRunParams *run_params)
+{
+    close(run_params->conninfo->connFd);
 
-void process_request_get_header(struct RunParams *run_params, char *header_buf, ssize_t buffer_size);
-void process_request_response_header(struct RunParams *run_params, char * header_buf, ssize_t buffer_size);
-void process_request_response_data(struct RunParams *run_params);
+    if (run_params->conninfo->localFileFd > 0)
+    {
+        close(run_params->conninfo->localFileFd);
+        run_params->conninfo->localFileFd = -2;
+    }
+
+    if (run_params->conninfo->recv_buf != NULL)
+    {
+        free(run_params->conninfo->recv_buf);
+        run_params->conninfo->recv_buf = NULL;
+    }
+    if (run_params->conninfo != NULL)
+    {
+        free(run_params->conninfo);
+        run_params->conninfo = NULL;
+    }
+}
 
 
-void process_request_get_header(struct RunParams *run_params, char *header_buf, ssize_t buffer_size)
+
+void process_request_get_header(struct SessionRunParams *run_params)
 {
     bool header_rcv = false;
     int index;
     ssize_t len;
+    const int buffer_size = 4096;
     char read_buffer[buffer_size];
 
-    memset(header_buf, 0, (size_t) buffer_size);
+    memset(run_params->conninfo->header_buf, 0, (size_t) MAX_HEADER_RESPONSE_SIZE);
     memset(read_buffer, 0, sizeof(read_buffer));
 
     printf("now read data\n");
@@ -196,16 +215,19 @@ void process_request_get_header(struct RunParams *run_params, char *header_buf, 
 
     if ( len == 0)
     {
-        printf("recv len 1: %ld\n", len);
-        free(run_params->conninfo->recv_buf);
-        run_params->conninfo->recv_buf = NULL;
-        run_params->conninfo->sessionRShutdown = SESSION_RSHUTDOWN;
-        // close(connSessionInfo->connFd);
-
-        if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER)
+        // 之前已经读完请求头
+        if (run_params->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+        {
+//            printf("recv len 1: %ld\n", len);
+//            free(run_params->conninfo->recv_buf);
+//            run_params->conninfo->recv_buf = NULL;
+            run_params->conninfo->sessionRShutdown = SESSION_RSHUTDOWN;
+        }
+        else if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER)
         {
             printf("header recv error\n");
-            close(run_params->conninfo->connFd);
+            // close(run_params->conninfo->connFd);
+            session_close(run_params);
         }
 
         return;
@@ -219,25 +241,28 @@ void process_request_get_header(struct RunParams *run_params, char *header_buf, 
     {
         // 可能要关闭事件
         printf("recv len 3: %ld", len);
-        free(run_params->conninfo->recv_buf);
-        free(run_params->conninfo);
-        // init_session(run_params->conninfo);
+        session_close(run_params);
 
-        close(run_params->conninfo->connFd);
         return;
     }
     else if (len < 0)
     {
-        printf("recv len 4: %ld\n", len);
-        fprintf(stderr, "str_echo: read error\n");
-        free(run_params->conninfo->recv_buf);
-        run_params->conninfo->recv_buf = NULL;
-        run_params->conninfo->sessionRShutdown = SESSION_RSHUTDOWN;
+
+
 
         if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER)
         {
             printf("header recv error\n");
-            close(run_params->conninfo->connFd);
+            // close(run_params->conninfo->connFd);
+            session_close(run_params);
+        }
+        else if (run_params->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+        {
+            printf("recv len 4: %ld\n", len);
+//            fprintf(stderr, "str_echo: read error\n");
+//            free(run_params->conninfo->recv_buf);
+//            run_params->conninfo->recv_buf = NULL;
+            run_params->conninfo->sessionRShutdown = SESSION_RSHUTDOWN;
         }
 
         return;
@@ -256,10 +281,10 @@ void process_request_get_header(struct RunParams *run_params, char *header_buf, 
             if (run_params->conninfo->recv_buf[index] == '\r' && run_params->conninfo->recv_buf[index+1] == '\n' &&
                 run_params->conninfo->recv_buf[index+2] == '\r' && run_params->conninfo->recv_buf[index+3] == '\n')
             {
-                strncpy(header_buf, run_params->conninfo->recv_buf, index + 3);
+                strncpy(run_params->conninfo->header_buf, run_params->conninfo->recv_buf, index + 3);
                 // printf("index: %d header info:\n%s\n", index, header_buf);
                 // 清空接受的数据，粗暴的丢弃后面接收的数据
-                memset(run_params->conninfo->recv_buf, 0, sizeof(run_params->conninfo->recv_buf));
+                memset(run_params->conninfo->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE);
                 header_rcv = true;
                 break;
             }
@@ -272,28 +297,49 @@ void process_request_get_header(struct RunParams *run_params, char *header_buf, 
         // 剩余可能还会有数据，暂不处理
     }
 
-    printf("have received header\n");
 
-    // 打印调试信息
-    printf("received:\n");
-    printf("%s", header_buf);
-    // 读取头完成
-    run_params->conninfo->sessionStatus = SESSION_RESPONSE;
+    if (header_rcv)
+    {
+        printf("have received header\n");
+
+        // 打印调试信息
+        printf("received:\n");
+        printf("%s", run_params->conninfo->header_buf);
+        // 读取头完成
+        run_params->conninfo->sessionStatus = SESSION_RESPONSE_HEADER;
+    }
+
 }
 
 
 
-void process_request_response_header(struct RunParams *run_params, char * header_buf, ssize_t buffer_size)
+
+void get_host_var_by_header(struct SessionRunParams * run_params_ptr, const struct request_header * header_request_ptr)
 {
-
-    char cli_addr_buff[INET_ADDRSTRLEN];
-    bool is_fastcgi = false;
-    struct sockaddr_in cli_sockaddr, srv_sockaddr;
-    int cli_sockaddr_len, srv_sockaddr_len;
-    char addr_buf[INET_ADDRSTRLEN];
-    int res_io;
-
     int host_index;
+
+    for (host_index = 0; host_index < run_params_ptr->params_run_ptr.host_count; host_index++)
+    {
+        printf("debug hostname:\n#%s#\n#%s#\n", header_request_ptr->host, run_params_ptr->hostvar[host_index].host);
+        if (strcmp(header_request_ptr->host, run_params_ptr->hostvar[host_index].host) == 0)
+        {
+            run_params_ptr->hostvar += host_index;
+            return;
+        }
+    }
+}
+
+
+void process_request_get_response_header(struct SessionRunParams * run_params_ptr)
+{
+    struct request_header header_request;
+    // char response[4096];
+    char ch_temp[1024];
+    struct stat statbuf;
+    char request_file[512];
+    int index_temp;
+    bool flag_temp;
+    bool is_fastcgi = false;
 
     struct response_header header_resonse = {
             .http_version = "HTTP/1.1",
@@ -305,226 +351,205 @@ void process_request_response_header(struct RunParams *run_params, char * header
             .status_desc = "OK"
     };
 
+    parse_header_request(run_params_ptr->conninfo->header_buf, &header_request);
+    get_host_var_by_header(run_params_ptr, &header_request);
 
+    printf("debug2: docroot:%s\n", run_params_ptr->hostvar->doc_root);
+    flag_temp = false;
+    for (index_temp = 0; index_temp < run_params_ptr->hostvar->method_allowed_len; index_temp++)
+        if (strcmp(run_params_ptr->hostvar->method_allowed[index_temp], header_request.method) == 0)
+        {
+            flag_temp = true;
+            break;
+        }
 
-    if (run_params->conninfo->localFileFd == -2)
+    if (str_endwith(header_request.uri, ".php"))
     {
-        struct request_header header_request;
-        char response[4096];
-        char ch_temp[1024];
-        struct stat statbuf;
-        char request_file[512];
-        int index_temp;
-        bool flag_temp;
-
-        parse_header_request(header_buf, &header_request);
-
-        for (host_index = 0; host_index < 2; host_index++)
+        sprintf(request_file, "%s/%s", run_params_ptr->hostvar->doc_root, header_request.uri);
+        is_fastcgi = true;
+    }
+    else if (!flag_temp)
+    {
+        SET_RESPONSE_STATUS_405(header_resonse);
+        strcpy(request_file, run_params_ptr->hostvar->request_file_405);
+    }
+    else if (strcmp(header_request.method, "GET") == 0)
+    {
+        // 访问的uri是目录的，重写到该目录下的index文件
+        if (header_request.uri[strlen(header_request.uri) - 1] == '/')
         {
-            printf("debug hostname:\n#%s#\n#%s#\n", header_request.host, run_params->hostvar[host_index].host);
-            if (strcmp(header_request.host, run_params->hostvar[host_index].host) == 0)
-                run_params->hostvar += host_index;
-        }
-
-
-        printf("debug2: docroot:%s\n", run_params->hostvar->doc_root);
-        flag_temp = false;
-        for (index_temp = 0; index_temp < run_params->hostvar->method_allowed_len; index_temp++)
-            if (strcmp(run_params->hostvar->method_allowed[index_temp], header_request.method) == 0)
+            sprintf(request_file, "%s/%s%s", run_params_ptr->hostvar->doc_root, header_request.uri, run_params_ptr->hostvar->file_indexs[0]);
+            if (access(request_file, F_OK) == -1)
             {
-                flag_temp = true;
-                break;
-            }
-
-        if (str_endwith(header_request.uri, ".php"))
-        {
-            sprintf(request_file, "%s/%s", run_params->hostvar->doc_root, header_request.uri);
-            is_fastcgi = true;
-        }
-        else if (!flag_temp)
-        {
-            SET_RESPONSE_STATUS_405(header_resonse);
-            strcpy(request_file, run_params->hostvar->request_file_405);
-        }
-        else if (strcmp(header_request.method, "GET") == 0)
-        {
-            // 访问的uri是目录的，重写到该目录下的index文件
-            if (header_request.uri[strlen(header_request.uri) - 1] == '/')
-            {
-                sprintf(request_file, "%s/%s%s", run_params->hostvar->doc_root, header_request.uri, run_params->hostvar->file_indexs[0]);
+                sprintf(request_file, "%s/%s%s", run_params_ptr->hostvar->doc_root, header_request.uri, run_params_ptr->hostvar->file_indexs[1]);
                 if (access(request_file, F_OK) == -1)
                 {
-                    sprintf(request_file, "%s/%s%s", run_params->hostvar->doc_root, header_request.uri, run_params->hostvar->file_indexs[1]);
-                    if (access(request_file, F_OK) == -1)
-                    {
-                        SET_RESPONSE_STATUS_403(header_resonse);
-                        strcpy(request_file, run_params->hostvar->request_file_403);
-                    }
-                    else
-                    SET_RESPONSE_STATUS_200(header_resonse);
+                    SET_RESPONSE_STATUS_403(header_resonse);
+                    strcpy(request_file, run_params_ptr->hostvar->request_file_403);
                 }
                 else
                 SET_RESPONSE_STATUS_200(header_resonse);
             }
             else
-            {
-                sprintf(request_file, "%s/%s", run_params->hostvar->doc_root, header_request.uri);
-
-                printf("request_file: %s\n", request_file);
-                // 根据文件是否存在，重新拼接请求文件，生成状态码
-                // 文件存在
-                if (access(request_file, F_OK) != -1)
-                {
-                    // 获取文件信息，如果失败则403
-                    if (stat(request_file, &statbuf) != -1)
-                    {
-                        // 如果为普通文件
-                        if (S_ISREG(statbuf.st_mode)) {
-                            SET_RESPONSE_STATUS_200(header_resonse);
-                        } else {
-                            SET_RESPONSE_STATUS_404(header_resonse);
-                            strcpy(request_file, run_params->hostvar->request_file_404);
-                        }
-                    }
-                    else
-                    {
-                        printf("get file %s stat error\n", request_file);
-                        SET_RESPONSE_STATUS_403(header_resonse);
-                        strcpy(request_file, run_params->hostvar->request_file_403);
-                    }
-
-                }
-                    // 文件不存在,则404
-                else
-                {
-                    SET_RESPONSE_STATUS_404(header_resonse);
-                    strcpy(request_file, run_params->hostvar->request_file_404);
-                }
-
-                printf("request_file: %s\n", request_file);
-
-            }
-
-
-        }
-        else if (strcmp(header_request.method, "POST") == 0)
-        {
-            printf("POST is not finished yet!\n");
-        }
-
-
-        if (is_fastcgi)
-        {
-            process_request_fastcgi(run_params->conninfo->connFd, request_file);
+            SET_RESPONSE_STATUS_200(header_resonse);
         }
         else
         {
+            sprintf(request_file, "%s/%s", run_params_ptr->hostvar->doc_root, header_request.uri);
             printf("request_file: %s\n", request_file);
-
-
-            if (stat(request_file, &statbuf) != -1)
-                header_resonse.content_length = statbuf.st_size;
-            else
+            // 根据文件是否存在，重新拼接请求文件，生成状态码
+            // 文件存在
+            if (access(request_file, F_OK) != -1)
             {
-                printf("get statbuf error!\n");
-                // continue;
-            }
-
-
-
-            // if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
-            if ((run_params->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0)
-            {
-                fprintf(stderr, "open file %s error!\n", request_file);
-                // exit(EXIT_FAILURE);
-                SET_RESPONSE_STATUS_403(header_resonse);
-                strcpy(request_file, run_params->hostvar->request_file_403);
-                // if ( (fd_request_file = fopen(request_file, "rb")) == NULL)
-                if ((run_params->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0)
+                // 获取文件信息，如果失败则403
+                if (stat(request_file, &statbuf) != -1)
                 {
-                    printf("open file error!\n");
-                    // continue;
+                    // 如果为普通文件
+                    if (S_ISREG(statbuf.st_mode)) {
+                        SET_RESPONSE_STATUS_200(header_resonse);
+                    } else {
+                        SET_RESPONSE_STATUS_404(header_resonse);
+                        strcpy(request_file, run_params_ptr->hostvar->request_file_404);
+                    }
+                }
+                else
+                {
+                    printf("get file %s stat error\n", request_file);
+                    SET_RESPONSE_STATUS_403(header_resonse);
+                    strcpy(request_file, run_params_ptr->hostvar->request_file_403);
                 }
 
             }
-
-
-            get_contenttype_by_filepath(request_file, run_params->hostvar->mimebook, MAX_MIMEBOOK_SIZE, &header_resonse);
-
-            printf("begine send\n");
-
-            // 拼接响应头
-            sprintf(response, "%s %d %s\n", header_resonse.http_version, header_resonse.status,
-                    header_resonse.status_desc);
-            sprintf(ch_temp, "Content-Type: %s\n", header_resonse.content_type);
-            strcat(response, ch_temp);
-            sprintf(ch_temp, "Content-Length: %llu\n", header_resonse.content_length);
-            strcat(response, ch_temp);
-            sprintf(ch_temp, "Connection: %s\n", header_resonse.connection);
-            strcat(response, ch_temp);
-            sprintf(ch_temp, "Server: %s\n\n", header_resonse.server);
-            strcat(response, ch_temp);
-
-
-            srv_sockaddr_len = sizeof(srv_sockaddr);
-            if (getsockname(run_params->conninfo->connFd, (struct sockaddr *) &srv_sockaddr, &srv_sockaddr_len) == -1)
-                printf("getsockname() error!\n");
+                // 文件不存在,则404
             else
             {
-                printf("local ip: %s", inet_ntop(AF_INET, &srv_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
-                printf(" local port: %d\n", ntohs(srv_sockaddr.sin_port));
+                SET_RESPONSE_STATUS_404(header_resonse);
+                strcpy(request_file, run_params_ptr->hostvar->request_file_404);
             }
 
-            cli_sockaddr_len = sizeof(cli_sockaddr);
-            if (getpeername(run_params->conninfo->connFd, (struct sockaddr *) &cli_sockaddr, &cli_sockaddr_len) == -1)
-                printf("getpeername() error!\n");
-            else
-            {
-                printf("peer ip: %s", inet_ntop(AF_INET, &cli_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
-                printf(" peer port: %d\n", ntohs(cli_sockaddr.sin_port));
-            }
-
-            printf("response header:\n%s", response);
-
-            printf("Connection from client: %s:%d\n",
-                   inet_ntop(AF_INET, &run_params->client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
-                   ntohs(run_params->client_sockaddr->sin_port));
-
-
-            // 发送响应头信息
-            if (run_params->conninfo->is_https)
-                res_io = SSL_write(run_params->conninfo->ssl, response, strlen(response));
-            else
-                res_io = writen(run_params->conninfo->connFd, response, strlen(response));
-
-
-            if (res_io < 0)
-            {
-                printf("writen header failed, continue\n");
-                close(run_params->conninfo->connFd);
-                return;
-            }
-            else
-            {
-                printf("writen header res: %d\n", res_io);
-            }
+            printf("request_file: %s\n", request_file);
 
         }
+
+
     }
-    else if (run_params->conninfo->localFileFd > 0)
+    else if (strcmp(header_request.method, "POST") == 0)
     {
-        printf("have sent headers, continue\n");
+        printf("POST is not finished yet!\n");
+    }
+
+
+    if (is_fastcgi)
+    {
+        process_request_fastcgi(run_params_ptr->conninfo->connFd, request_file);
     }
     else
     {
-        printf("known error, now return\n");
-        return;
+        printf("request_file: %s\n", request_file);
+
+        if (stat(request_file, &statbuf) != -1)
+            header_resonse.content_length = statbuf.st_size;
+        else {
+            printf("get statbuf error!\n");
+            // continue;
+        }
+
+        if ((run_params_ptr->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0) {
+            fprintf(stderr, "open file %s error!\n", request_file);
+            SET_RESPONSE_STATUS_403(header_resonse);
+            strcpy(request_file, run_params_ptr->hostvar->request_file_403);
+            if ((run_params_ptr->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0) {
+                fprintf(stderr, "open file %s error!\n", request_file);
+                // continue;
+            }
+
+        }
+
+        get_contenttype_by_filepath(request_file, run_params_ptr->hostvar->mimebook, MAX_MIMEBOOK_SIZE,
+                                    &header_resonse);
+
+        // 拼接响应头
+        sprintf(run_params_ptr->conninfo->header_response, "%s %d %s\n", header_resonse.http_version, header_resonse.status,
+                header_resonse.status_desc);
+        sprintf(ch_temp, "Content-Type: %s\n", header_resonse.content_type);
+        strcat(run_params_ptr->conninfo->header_response, ch_temp);
+        sprintf(ch_temp, "Content-Length: %llu\n", header_resonse.content_length);
+        strcat(run_params_ptr->conninfo->header_response, ch_temp);
+        sprintf(ch_temp, "Connection: %s\n", header_resonse.connection);
+        strcat(run_params_ptr->conninfo->header_response, ch_temp);
+        sprintf(ch_temp, "Server: %s\n\n", header_resonse.server);
+        strcat(run_params_ptr->conninfo->header_response, ch_temp);
     }
 
 }
 
 
-void process_request_response_data(struct RunParams *run_params)
+void pr_client_info(struct SessionRunParams *run_params_ptr)
+{
+    char cli_addr_buff[INET_ADDRSTRLEN];
+    struct sockaddr_in cli_sockaddr, srv_sockaddr;
+    int cli_sockaddr_len, srv_sockaddr_len;
+    char addr_buf[INET_ADDRSTRLEN];
+
+    srv_sockaddr_len = sizeof(srv_sockaddr);
+    if (getsockname(run_params_ptr->conninfo->connFd, (struct sockaddr *) &srv_sockaddr, &srv_sockaddr_len) == -1)
+        printf("getsockname() error!\n");
+    else
+    {
+        printf("local ip: %s", inet_ntop(AF_INET, &srv_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
+        printf(" local port: %d\n", ntohs(srv_sockaddr.sin_port));
+    }
+
+    cli_sockaddr_len = sizeof(cli_sockaddr);
+    if (getpeername(run_params_ptr->conninfo->connFd, (struct sockaddr *) &cli_sockaddr, &cli_sockaddr_len) == -1)
+        printf("getpeername() error!\n");
+    else
+    {
+        printf("peer ip: %s", inet_ntop(AF_INET, &cli_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
+        printf(" peer port: %d\n", ntohs(cli_sockaddr.sin_port));
+    }
+
+    printf("response header:\n%s", run_params_ptr->conninfo->header_response);
+
+    printf("Connection from client: %s:%d\n",
+           inet_ntop(AF_INET, &run_params_ptr->client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
+           ntohs(run_params_ptr->client_sockaddr->sin_port));
+}
+
+
+void process_request_response_header(struct SessionRunParams *run_params_ptr)
+{
+    int write_len;
+
+    process_request_get_response_header(run_params_ptr);
+    pr_client_info(run_params_ptr);
+
+    // 发送响应头信息
+    if (run_params_ptr->conninfo->is_https)
+        write_len = SSL_write(run_params_ptr->conninfo->ssl, run_params_ptr->conninfo->header_response,
+                strlen(run_params_ptr->conninfo->header_response));
+    else
+        write_len = writen(run_params_ptr->conninfo->connFd, run_params_ptr->conninfo->header_response,
+                strlen(run_params_ptr->conninfo->header_response));
+
+    if (write_len < 0)
+    {
+        printf("writen header failed, continue\n");
+        // close(run_params_ptr->conninfo->connFd);
+        session_close(run_params_ptr);
+        return;
+    }
+    else
+    {
+        printf("writen header res: %d\n", write_len);
+        run_params_ptr->conninfo->sessionStatus = SESSION_RESPONSE_BODY;
+    }
+
+}
+
+
+
+void process_request_response_data(struct SessionRunParams *run_params)
 {
     ssize_t buffer_size = 4096, read_buffer_size;
     char send_buffer[buffer_size];
@@ -544,8 +569,10 @@ void process_request_response_data(struct RunParams *run_params)
             // if ( (res_io = write(connSessionInfo->connFd, send_buffer, read_buffer_size) ) < 0)
         {
             printf("writen body failed, continue\n");
-            close(run_params->conninfo->connFd);
-            close(run_params->conninfo->localFileFd);
+            session_close(run_params);
+//            close(run_params->conninfo->connFd);
+//            close(run_params->conninfo->localFileFd);
+
             return;
         }
         else if (res_io == read_buffer_size)
@@ -554,7 +581,7 @@ void process_request_response_data(struct RunParams *run_params)
         }
         else
         {
-            printf("writen body not full, res: %d read_buffer_size: %d\n", res_io, read_buffer_size);
+            printf("writen body not full, res: %d read_buffer_size: %ld\n", res_io, read_buffer_size);
         }
     }
     else if (read_buffer_size == 0)
@@ -563,30 +590,16 @@ void process_request_response_data(struct RunParams *run_params)
         (run_params->conninfo->connTransactions)++;
         printf("session count: %d\n", run_params->conninfo->connTransactions);
         if (run_params->conninfo->sessionRShutdown == SESSION_RSHUTDOWN)
-        {
             // 读取输入时，已经处理recv_buf
-            close(run_params->conninfo->connFd);
-            free(run_params->conninfo->recv_buf);
-            free(run_params->conninfo);
-
-        }
+            session_close(run_params);
         else
         {
-//                printf("finish session, now keep alive\n");
-//                free(connSessionInfo->recv_buf);
-//                init_session(connSessionInfo);
-
-            close(run_params->conninfo->connFd);
-            free(run_params->conninfo->recv_buf);
-            free(run_params->conninfo);
-            // init_session(run_params->conninfo);
-
-
-
-//                printf("finish session, now keep alive\n");
-//                connSessionInfo->sessionStatus = SESSION_END;
-
-
+            run_params->conninfo->sessionStatus = SESSION_READ_HEADER;
+//            close(run_params->conninfo->connFd);
+//            free(run_params->conninfo->recv_buf);
+//            free(run_params->conninfo);
+//
+//            close(run_params->conninfo->localFileFd);
         }
         return;
     }
@@ -598,30 +611,46 @@ void process_request_response_data(struct RunParams *run_params)
 
 
 
-void process_request(struct RunParams * run_params);
+void process_request(struct SessionRunParams * run_params);
 
-
-void process_request(struct RunParams * run_params)
+void process_request(struct SessionRunParams * run_params)
 {
-    ssize_t buffer_size = 4096;
-    char header_buf[buffer_size];
+//    ssize_t buffer_size = 4096;
+//    char header_buf[buffer_size];
 
 
     printf("session status: %d localfile_fd: %d\n", run_params->conninfo->sessionStatus, run_params->conninfo->localFileFd);
 
-    if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER && run_params->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
-    {
-        process_request_get_header(run_params, header_buf, buffer_size);
-    }
-    else
-    {
-        process_request_response_header(run_params, header_buf, buffer_size);
-    }
+//    if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER && run_params->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
+//    {
+//        process_request_get_header(run_params, header_buf, buffer_size);
+//    }
+//    else
+//    {
+//        process_request_response_header(run_params, header_buf, buffer_size);
+//    }
+//
+//
+//    if (run_params->conninfo->sessionRcvData == SESSION_DATA_WRITE_READY && run_params->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+//    {
+//        process_request_response_data(run_params);
+//    }
 
 
-    if (run_params->conninfo->sessionRcvData == SESSION_DATA_WRITE_READY && run_params->conninfo->sessionStatus == SESSION_RESPONSE)
+
+    if (run_params->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
     {
-        process_request_response_data(run_params);
+        if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER)
+            process_request_get_header(run_params);
+        else if (run_params->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+            process_request_get_header(run_params);
+    }
+    else if (run_params->conninfo->sessionRcvData == SESSION_DATA_WRITE_READY)
+    {
+        if (run_params->conninfo->sessionStatus == SESSION_RESPONSE_BODY)
+            process_request_response_data(run_params);
+        else if (run_params->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+            process_request_response_header(run_params);
     }
 
 
@@ -744,7 +773,7 @@ void get_app_cwdir(int argc, char ** argv, char * app_cwdir)
 
 
 
-void get_config_file_path(int argc, char ** argv, char * config_file_path);
+
 
 void get_config_file_path(int argc, char ** argv, char * config_file_path)
 {
@@ -805,17 +834,16 @@ int main(int argc, char ** argv) {
 
     struct connConf connConfLimit;
     struct connInfo * connSessionInfos;
-    struct RunParams run_param[MAX_EPOLL_SIZE];
+    struct SessionRunParams run_param[MAX_EPOLL_SIZE];
 
     struct hostVar * host_var_ptr;
     char config_file_path[PATH_MAX] = "../conf/dagama.conf";
-    int host_num_count;
 
     get_config_file_path(argc, argv, config_file_path);
     printf("config_file_path: %s\n", config_file_path);
-    host_num_count = get_config_host_num(config_file_path);
+    run_param->params_run_ptr.host_count = get_config_host_num(config_file_path);
 
-    host_var_ptr = malloc(sizeof(struct hostVar) * host_num_count);
+    host_var_ptr = malloc(sizeof(struct hostVar) * run_param->params_run_ptr.host_count);
 
     init_config(host_var_ptr, config_file_path);
 
@@ -899,7 +927,7 @@ int main(int argc, char ** argv) {
                     init_session(connSessionInfos);
 
                     connSessionInfos->recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
-                    memset(connSessionInfos->recv_buf, 0, sizeof(*connSessionInfos->recv_buf) );
+                    memset(connSessionInfos->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE );
                     printf("receive conn:%d\n", connfd);
 
                     connSessionInfos->connFd = connfd;
@@ -951,7 +979,7 @@ int main(int argc, char ** argv) {
                     init_session(connSessionInfos);
 
                     connSessionInfos->recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
-                    memset(connSessionInfos->recv_buf, 0, sizeof(*connSessionInfos->recv_buf) );
+                    memset(connSessionInfos->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE );
                     printf("receive conn:%d\n", connfd);
 
                     connSessionInfos->connFd = connfd;
@@ -964,7 +992,8 @@ int main(int argc, char ** argv) {
                     run_param[connfd].client_sockaddr = &client_sockaddr;
 
                     printf("run_param[connfd].hostvar: %s %s\n",
-                            run_param[connfd].hostvar->host, run_param[connfd].hostvar->doc_root);
+                           run_param[connfd].hostvar->host,
+                           run_param[connfd].hostvar->doc_root);
 
 
                     SSL * ssl;
@@ -974,6 +1003,7 @@ int main(int argc, char ** argv) {
             }
             else if (tmpConnFd >= 5)
             {
+                // printf("recv data >= 5:\n");
                 // 有数据到达，可以读
                 if (tmpEvent & EPOLLIN)
                 {
@@ -1014,11 +1044,13 @@ int main(int argc, char ** argv) {
                     }
                     else
                     {
+                        printf("recv data >= 5-1-2:\n");
                         if (run_param[tmpConnFd].conninfo->sessionStatus != SESSION_END)
                         {
+                            printf("recv data >= 5-1-3:\n");
                             run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_READ_READY;
                             printf("EVENT: ready read: %d\n", tmpConnFd);
-                            process_request(&run_param[tmpConnFd]);
+                            process_request(&(run_param[tmpConnFd]) );
                         }
                     }
 
@@ -1027,11 +1059,17 @@ int main(int argc, char ** argv) {
                 // 可以写
                 if (tmpEvent & EPOLLOUT)
                 {
-                    if (run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE)
+                    // printf("recv data >= 5-2-1:\n");
+//                    printf("run_param[tmpConnFd].conninfo->sessionStatus: %d %d\n",
+//                           run_param[tmpConnFd].conninfo->sessionStatus, tmpConnFd);
+
+                    if (run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE_HEADER ||
+                            run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE_BODY)
                     {
+                        printf("recv data >= 5-2-2:\n");
                         run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_WRITE_READY;
                         printf("EVENT: ready write: %d\n", tmpConnFd);
-                        process_request(&run_param[tmpConnFd]);
+                        process_request(&(run_param[tmpConnFd]) );
                     }
                 }
             }
@@ -1043,3 +1081,4 @@ int main(int argc, char ** argv) {
     }
 
 }
+

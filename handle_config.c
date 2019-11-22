@@ -284,16 +284,14 @@ void init_config(struct hostVar * host_var_ptr, char * config_file_path)
 {
     struct config_all_host_kv all_host_kv;
 
-
     strncpy(all_host_kv.config_file_path, config_file_path, PATH_MAX);
-
     all_host_kv.host_num = get_config_host_num(config_file_path);
-    printf("host_num: %d\n", all_host_kv.host_num);
     all_host_kv.host_config_kv = (struct config_host_kv *) malloc(sizeof(struct config_host_kv) * all_host_kv.host_num);
-
     get_all_host_config(&all_host_kv);
     set_host_config(&all_host_kv, host_var_ptr);
 
+
+    // 调试用，打印出来所有配置的值
     int index, index2;
     printf("----------------\n");
     for (index = 0; index < 3; index++)
@@ -321,98 +319,3 @@ void init_config(struct hostVar * host_var_ptr, char * config_file_path)
 }
 
 
-
-
-
-
-
-
-//
-//printf("%d %d  %d\n", all_host_kv->host_config_kv[0].current_key_num,
-//all_host_kv->host_config_kv[1].current_key_num,
-//all_host_kv->host_config_kv[2].current_key_num);
-//
-//printf("%s     %s\n", all_host_kv->host_config_kv[2].config_kv[3].key,
-//all_host_kv->host_config_kv[2].config_kv[3].value);
-//
-//printf("test1: %s  %s\n", defalt_config_host_kv.config_kv[2].key, defalt_config_host_kv.config_kv[2].value);
-//
-//
-//char mime_file[PATH_MAX] = "/home/liushan/mylab/clang/dagama/mime.types";
-//strncpy(host_var_ptr[0].host, "192.168.123.173:8043", PATH_MAX);
-//strncpy(host_var_ptr[0].doc_root, "/home/liushan/mylab/clang/dagama/webroot", PATH_MAX);
-//
-//strncpy(host_var_ptr[0].file_indexs[0], "index.html", PATH_MAX);
-//strncpy(host_var_ptr[0].file_indexs[1], "index.htm", PATH_MAX);
-//host_var_ptr[0].file_indexs_len = 2;
-//
-//strncpy(host_var_ptr[0].method_allowed[0], "GET", 8);
-//strncpy(host_var_ptr[0].method_allowed[1], "DELETE", 8);
-//strncpy(host_var_ptr[0].method_allowed[2], "POST", 8);
-//host_var_ptr[0].method_allowed_len = 3;
-//
-//strncpy(host_var_ptr[0].request_file_403, "/home/liushan/mylab/clang/dagama/webroot/html/403.html", PATH_MAX);
-//strncpy(host_var_ptr[0].request_file_404, "/home/liushan/mylab/clang/dagama/webroot/html/404.html", PATH_MAX);
-//strncpy(host_var_ptr[0].request_file_405, "/home/liushan/mylab/clang/dagama/webroot/html/405.html", PATH_MAX);
-//
-//
-//get_mimebook(mime_file, host_var_ptr[0].mimebook, MAX_MIMEBOOK_SIZE);
-//
-//
-//
-//strncpy(host_var_ptr[1].host, "192.168.123.173:8080", PATH_MAX);
-//strncpy(host_var_ptr[1].doc_root, "/home/liushan/mylab/clang/dagama/webroot-2", PATH_MAX);
-//
-//strncpy(host_var_ptr[1].file_indexs[0], "index.html", PATH_MAX);
-//strncpy(host_var_ptr[1].file_indexs[1], "index.htm", PATH_MAX);
-//host_var_ptr[1].file_indexs_len = 2;
-//
-//strncpy(host_var_ptr[1].method_allowed[0], "GET", 8);
-//strncpy(host_var_ptr[1].method_allowed[1], "DELETE", 8);
-//strncpy(host_var_ptr[1].method_allowed[2], "POST", 8);
-//host_var_ptr[1].method_allowed_len = 3;
-//
-//strncpy(host_var_ptr[1].request_file_403, "/home/liushan/mylab/clang/dagama/webroot/html/403.html", PATH_MAX);
-//strncpy(host_var_ptr[1].request_file_404, "/home/liushan/mylab/clang/dagama/webroot/html/404.html", PATH_MAX);
-//strncpy(host_var_ptr[1].request_file_405, "/home/liushan/mylab/clang/dagama/webroot/html/405.html", PATH_MAX);
-//
-//get_mimebook(mime_file, host_var_ptr[1].mimebook, MAX_MIMEBOOK_SIZE);
-
-//void init_host_run_params(struct RunParams * host_run_params_ptr[], struct hostVar * host_var[], int num)
-//{
-//    int index1, index2;
-//    struct RunParams * temp_host_run_params_ptr;
-//
-//    for (index1 = 0; index1 < num; index1++)
-//    {
-//        temp_host_run_params_ptr = host_run_params_ptr[index1];
-//        temp_host_run_params_ptr->hostvar = host_var[index1];
-//
-//        for (index2 = 0; index2 < MAX_EPOLL_SIZE; index2++)
-//        {
-//
-////            temp_host_run_params_ptr->conninfo->is_https = false;
-////            temp_host_run_params_ptr->conninfo->https_ssl_have_conned = false;
-////            temp_host_run_params_ptr->conninfo->ssl = NULL;
-//
-//
-////            temp_host_run_params_ptr[index2].default_request_file = &request_file_default;
-////            for (index2 = 0; index2 < sizeof(file_index) / sizeof(char *); index2++)
-////                run_param[index2].file_index[index2] = file_index[index2];
-////
-////            for (index2 = 0; index2 < sizeof(method_allow) / sizeof(char *); index2++)
-////                run_param[index2].method_allow[index2] = method_allow[index2];
-////            run_param->method_allow_len = sizeof(method_allow) / sizeof(char *);
-////            run_param[index2].mimebook = mimebook;
-////            run_param[index2].mimebook_len = mimebook_len;
-////            run_param[index2].doc_root = doc_root;
-////            run_param[index2].client_sockaddr = &client_sockaddr;
-////
-////            run_param[index2].is_https = false;
-////            run_param[index2].https_ssl_have_conned = false;
-////            run_param[index2].ssl = NULL;
-//        }
-//    }
-//
-//
-//}

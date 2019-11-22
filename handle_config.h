@@ -105,7 +105,7 @@ static struct config_host_kv defalt_config_host_kv = {
 bool get_value_by_key(struct config_key_value * config_kv_ptr, char * * ch, int num);
 int get_config_host_num(const char *);
 void init_config(struct hostVar * host_var_ptr, char * config_file_path);
-void init_host_run_params(struct RunParams * [], struct hostVar * [], int);
+void init_host_run_params(struct SessionRunParams * [], struct hostVar * [], int);
 void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mimebook_len);
 void get_all_host_config(struct config_all_host_kv * all_host_kv);
 void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar *);

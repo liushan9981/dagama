@@ -23,11 +23,12 @@
 #define MAX_HEADER_METHOD_ALLOW_NUM 8
 #define MAX_HEADER_METHOD_ALLOW_SIZE 8
 #define MAX_HEADER_FILE_INDEX_NUM 16
+#define MAX_HEADER_RESPONSE_SIZE 4096
 
 // 会话的状态
 #define SESSION_READ_HEADER 1
-#define SESSION_RESPONSE 2
-#define SESSION_RESPONSE_FIN 3
+#define SESSION_RESPONSE_HEADER 2
+#define SESSION_RESPONSE_BODY 3
 #define SESSION_END 4
 
 // 是否收到数据
@@ -81,6 +82,8 @@ struct connInfo {
     int connFd;
     int localFileFd;
     char * recv_buf;
+    char header_buf[MAX_HEADER_RESPONSE_SIZE];
+    char header_response[MAX_HEADER_RESPONSE_SIZE];
     unsigned int sessionStatus;
     unsigned int sessionRShutdown;
     unsigned int sessionRcvData;
@@ -106,11 +109,16 @@ struct hostVar {
 
 
 
-struct RunParams {
+struct ParamsRun {
+    int host_count;
+};
+
+
+struct SessionRunParams {
     struct connInfo * conninfo;
     struct sockaddr_in * client_sockaddr;
-
     struct hostVar * hostvar;
+    struct ParamsRun params_run_ptr;
 
 //    const struct DefaultReqFile * default_request_file;
 //    char * file_index[2];
@@ -123,7 +131,18 @@ struct RunParams {
 
 
 
-
 void get_value_by_header(const char * header, const char * header_key, char * header_value);
+void session_close(struct SessionRunParams *run_params);
+void get_config_file_path(int argc, char ** argv, char * config_file_path);
+
+// header
+void get_host_var_by_header(struct SessionRunParams * run_params_ptr, const struct request_header * header_request_ptr);
+void process_request_get_header(struct SessionRunParams *run_params);
+void process_request_get_response_header(struct SessionRunParams * run_params_ptr);
+void process_request_response_header(struct SessionRunParams *run_params);
+
+void process_request_response_data(struct SessionRunParams *run_params);
+
+void pr_client_info(struct SessionRunParams *run_params_ptr);
 
 #endif //DAGAMA_MAIN_H
