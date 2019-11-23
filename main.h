@@ -7,14 +7,15 @@
 
 #include <stdbool.h>
 #include <limits.h>
+#include <sys/epoll.h>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
 #define SET_RESPONSE_STATUS_200(header_resonse)  header_resonse.status = 200; strcpy(header_resonse.status_desc, "OK")
 #define SET_RESPONSE_STATUS_403(header_resonse)  header_resonse.status = 403; strcpy(header_resonse.status_desc, "forbidden")
-#define SET_RESPONSE_STATUS_404(header_resonse)  header_resonse.status = 404; strcpy(header_resonse.status_desc, "file not found");
-#define SET_RESPONSE_STATUS_405(header_resonse)  header_resonse.status = 405; strcpy(header_resonse.status_desc, "method not allowed");
+#define SET_RESPONSE_STATUS_404(header_resonse)  header_resonse.status = 404; strcpy(header_resonse.status_desc, "file not found")
+#define SET_RESPONSE_STATUS_405(header_resonse)  header_resonse.status = 405; strcpy(header_resonse.status_desc, "method not allowed")
 
 
 #define EXTENSION_NAME_LENTH 8
@@ -111,6 +112,9 @@ struct hostVar {
 
 struct ParamsRun {
     int host_count;
+    struct hostVar * hostvar;
+    int epoll_fd;
+    struct epoll_event event;
 };
 
 
@@ -118,31 +122,39 @@ struct SessionRunParams {
     struct connInfo * conninfo;
     struct sockaddr_in * client_sockaddr;
     struct hostVar * hostvar;
-    struct ParamsRun params_run_ptr;
-
-//    const struct DefaultReqFile * default_request_file;
-//    char * file_index[2];
-//    char * method_allow[3];
-//    unsigned int method_allow_len;
-//    struct mimedict * mimebook;
-//    unsigned int mimebook_len;
-//    char * doc_root;
 };
 
 
+// ssl
+void init_openssl();
+SSL_CTX * create_context_ssl(void);
+void configure_context_ssl(SSL_CTX * ctx);
+
+void event_add(struct epoll_event * event, int epoll_fd, int fd);
+void event_update(struct epoll_event * event, int epoll_fd, int fd);
 
 void get_value_by_header(const char * header, const char * header_key, char * header_value);
-void session_close(struct SessionRunParams *run_params);
+void session_close(struct SessionRunParams *session_params_ptr);
 void get_config_file_path(int argc, char ** argv, char * config_file_path);
 
+void process_request(struct SessionRunParams *, struct ParamsRun *);
+
 // header
-void get_host_var_by_header(struct SessionRunParams * run_params_ptr, const struct request_header * header_request_ptr);
-void process_request_get_header(struct SessionRunParams *run_params);
-void process_request_get_response_header(struct SessionRunParams * run_params_ptr);
-void process_request_response_header(struct SessionRunParams *run_params);
+void get_host_var_by_header(struct SessionRunParams * session_params_ptr,
+        const struct request_header * header_request_ptr, struct ParamsRun *);
+void process_request_get_header(struct SessionRunParams *session_params_ptr);
+void process_request_get_response_header(struct SessionRunParams * session_params_ptr, struct ParamsRun *);
+void process_request_response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun *);
 
-void process_request_response_data(struct SessionRunParams *run_params);
+void process_request_response_data(struct SessionRunParams *session_params_ptr);
 
-void pr_client_info(struct SessionRunParams *run_params_ptr);
+void pr_client_info(struct SessionRunParams *session_params_ptr);
+
+void get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [], int mimebook_len,
+                                 struct response_header * header_resonse);
+void parse_header_request(char * headers_recv, struct request_header * headers_request);
+void init_session(struct connInfo * connSessionInfo);
+int create_listen_sock(int port, struct sockaddr_in * server_sockaddr);
+void test_module(int argc, char ** argv);
 
 #endif //DAGAMA_MAIN_H
