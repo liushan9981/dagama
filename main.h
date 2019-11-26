@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <sys/epoll.h>
+#include <arpa/inet.h>
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -26,11 +27,13 @@
 #define MAX_HEADER_FILE_INDEX_NUM 16
 #define MAX_HEADER_RESPONSE_SIZE 4096
 
+#define ACCEPT_CONTINUE_FLAG -3
+
 // 会话的状态
 #define SESSION_READ_HEADER 1
 #define SESSION_RESPONSE_HEADER 2
 #define SESSION_RESPONSE_BODY 3
-#define SESSION_END 4
+
 
 // 是否收到数据
 #define SESSION_DATA_READ_READY 1
@@ -40,6 +43,9 @@
 // 客户端是否断开连接
 #define SESSION_RNSHUTDOWN 0
 #define SESSION_RSHUTDOWN 1
+
+
+
 
 
 struct request_header {
@@ -125,6 +131,17 @@ struct SessionRunParams {
 };
 
 
+
+
+static int http_listen_fd, https_listen_fd;
+static struct SessionRunParams session_run_param[MAX_EPOLL_SIZE];
+static struct ParamsRun run_params;
+static SSL_CTX * ctx;
+static char config_file_path[PATH_MAX] = "../conf/dagama.conf";
+static struct sockaddr_in http_server_sockaddr, https_server_sockaddr;
+static struct sockaddr_in client_sockaddr;
+
+
 // ssl
 void init_openssl();
 SSL_CTX * create_context_ssl(void);
@@ -132,6 +149,14 @@ void configure_context_ssl(SSL_CTX * ctx);
 
 void event_add(struct epoll_event * event, int epoll_fd, int fd);
 void event_update(struct epoll_event * event, int epoll_fd, int fd);
+
+// session
+int accept_session(int listen_fd, unsigned int * cli_len);
+void new_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd);
+void new_http_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr);
+void new_https_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr, SSL_CTX * ctx);
+void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd);
+
 
 void get_value_by_header(const char * header, const char * header_key, char * header_value);
 void session_close(struct SessionRunParams *session_params_ptr);
@@ -156,5 +181,10 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 void init_session(struct connInfo * connSessionInfo);
 int create_listen_sock(int port, struct sockaddr_in * server_sockaddr);
 void test_module(int argc, char ** argv);
+
+void install_signal(void);
+void get_run_params(int argc, char ** argv);
+void start_listen(void);
+void handle_session(void);
 
 #endif //DAGAMA_MAIN_H

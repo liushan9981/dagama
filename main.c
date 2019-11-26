@@ -10,7 +10,6 @@
 #include <ctype.h>
 #include <regex.h>
 #include <unistd.h>
-#include <arpa/inet.h>
 #include <limits.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -26,6 +25,7 @@
 #include "main.h"
 #include "handle_config.h"
 #include "myutils.h"
+
 
 
 void get_value_by_header(const char * header, const char * header_key, char * header_value)
@@ -150,42 +150,6 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
 }
 
 
-void init_session(struct connInfo * connSessionInfo)
-{
-        connSessionInfo->recv_buf = NULL;
-        connSessionInfo->localFileFd = -2;
-        connSessionInfo->sessionStatus = SESSION_READ_HEADER;
-        connSessionInfo->sessionRShutdown = SESSION_RNSHUTDOWN;
-        connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
-}
-
-
-void session_close(struct SessionRunParams * session_params_ptr)
-{
-    close(session_params_ptr->conninfo->connFd);
-    printf("closed connFd: %d\n", session_params_ptr->conninfo->connFd);
-    if (session_params_ptr->conninfo->localFileFd > 0)
-    {
-        close(session_params_ptr->conninfo->localFileFd);
-        session_params_ptr->conninfo->localFileFd = -2;
-        printf("closed localFileFd: %d\n", session_params_ptr->conninfo->localFileFd);
-    }
-
-    if (session_params_ptr->conninfo->recv_buf != NULL)
-    {
-        free(session_params_ptr->conninfo->recv_buf);
-        session_params_ptr->conninfo->recv_buf = NULL;
-        printf("have freed run_params->conninfo->recv_buf\n");
-    }
-    if (session_params_ptr->conninfo != NULL)
-    {
-        free(session_params_ptr->conninfo);
-        session_params_ptr->conninfo = NULL;
-        printf("have freed run_params->conninfo\n");
-    }
-}
-
-
 
 void process_request_get_header(struct SessionRunParams * session_params_ptr)
 {
@@ -236,7 +200,6 @@ void process_request_get_header(struct SessionRunParams * session_params_ptr)
         // 可能要关闭事件
         printf("recv len 3: %ld", len);
         session_close(session_params_ptr);
-
         return;
     }
     else if (len < 0)
@@ -311,7 +274,8 @@ void get_host_var_by_header(struct SessionRunParams * session_params_ptr,
 
     for (host_index = 0; host_index < run_params_ptr->host_count; host_index++)
     {
-        printf("debug hostname:\n#%s#\n#%s#\n", header_request_ptr->host, session_params_ptr->hostvar[host_index].host);
+        printf("debug hostname:\n#%s#\n#%s#\n", header_request_ptr->host, run_params_ptr->hostvar[host_index].host);
+        printf("debug cmp: %d\n", strcmp(header_request_ptr->host, run_params_ptr->hostvar[host_index].host) );
         if (strcmp(header_request_ptr->host, run_params_ptr->hostvar[host_index].host) == 0)
         {
             session_params_ptr->hostvar = &(run_params_ptr->hostvar[host_index]);
@@ -460,7 +424,8 @@ void process_request_get_response_header(struct SessionRunParams * session_param
             strcpy(request_file, session_params_ptr->hostvar->request_file_403);
             if ((session_params_ptr->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0) {
                 fprintf(stderr, "open file %s error!\n", request_file);
-                // continue;
+                session_close(session_params_ptr);
+                return;
             }
 
         }
@@ -522,6 +487,10 @@ void process_request_response_header(struct SessionRunParams *session_params_ptr
     int write_len;
 
     process_request_get_response_header(session_params_ptr, run_params_ptr);
+
+    if (session_params_ptr->conninfo == NULL)
+        return;
+
     pr_client_info(session_params_ptr);
 
     // 发送响应头信息
@@ -572,7 +541,7 @@ void process_request_response_data(struct SessionRunParams *session_params_ptr)
         }
         else if (res_io == read_buffer_size)
         {
-            printf("writen body full, res: %d\n", res_io);
+            // printf("writen body full, res: %d\n", res_io);
         }
         else
         {
@@ -604,23 +573,6 @@ void process_request(struct SessionRunParams * session_params_ptr, struct Params
 {
     printf("session status: %d localfile_fd: %d\n", session_params_ptr->conninfo->sessionStatus,
             session_params_ptr->conninfo->localFileFd);
-
-//    if (run_params->conninfo->sessionStatus == SESSION_READ_HEADER && run_params->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
-//    {
-//        process_request_get_header(run_params, header_buf, buffer_size);
-//    }
-//    else
-//    {
-//        process_request_response_header(run_params, header_buf, buffer_size);
-//    }
-//
-//
-//    if (run_params->conninfo->sessionRcvData == SESSION_DATA_WRITE_READY && run_params->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
-//    {
-//        process_request_response_data(run_params);
-//    }
-
-
 
     if (session_params_ptr->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
     {
@@ -765,9 +717,6 @@ void get_app_cwdir(int argc, char ** argv, char * app_cwdir)
 }
 
 
-
-
-
 void get_config_file_path(int argc, char ** argv, char * config_file_path)
 {
     char dest_path2[PATH_MAX];
@@ -821,31 +770,266 @@ void event_update(struct epoll_event * event, int epoll_fd, int fd)
 }
 
 
-int main(int argc, char ** argv) {
+void init_session(struct connInfo * connSessionInfo)
+{
+    connSessionInfo->recv_buf = NULL;
+    connSessionInfo->localFileFd = -2;
+    connSessionInfo->sessionStatus = SESSION_READ_HEADER;
+    connSessionInfo->sessionRShutdown = SESSION_RNSHUTDOWN;
+    connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
+}
 
-    // test_module(argc, argv);
+
+void session_close(struct SessionRunParams * session_params_ptr)
+{
+    close(session_params_ptr->conninfo->connFd);
+    printf("closed connFd: %d\n", session_params_ptr->conninfo->connFd);
+    if (session_params_ptr->conninfo->localFileFd > 0)
+    {
+        close(session_params_ptr->conninfo->localFileFd);
+        session_params_ptr->conninfo->localFileFd = -2;
+        printf("closed localFileFd: %d\n", session_params_ptr->conninfo->localFileFd);
+    }
+
+    if (session_params_ptr->conninfo->recv_buf != NULL)
+    {
+        free(session_params_ptr->conninfo->recv_buf);
+        session_params_ptr->conninfo->recv_buf = NULL;
+        printf("have freed run_params->conninfo->recv_buf\n");
+    }
+    if (session_params_ptr->conninfo != NULL)
+    {
+        free(session_params_ptr->conninfo);
+        session_params_ptr->conninfo = NULL;
+        printf("have freed run_params->conninfo\n");
+    }
+}
+
+
+void new_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd)
+{
+    struct connInfo * connSessionInfos;
+
+    memset(&(run_params_ptr->event), 0, sizeof(run_params_ptr->event));
+
+    run_params_ptr->event.data.fd = connfd;
+    run_params_ptr->event.events = EPOLLIN;
+    event_add(&(run_params_ptr->event), run_params_ptr->epoll_fd, connfd);
+
+    connSessionInfos = malloc(sizeof(struct connInfo));
+    init_session(connSessionInfos);
+
+    connSessionInfos->recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
+    memset(connSessionInfos->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE );
+    printf("receive conn:%d\n", connfd);
+
+    connSessionInfos->connFd = connfd;
+    connSessionInfos->connTransactions = 0;
+    session_params_ptr[connfd].conninfo = connSessionInfos;
+}
+
+
+void new_http_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr)
+{
+    new_session(session_params_ptr, run_params_ptr, connfd);
+
+    session_params_ptr[connfd].conninfo->is_https = false;
+    session_params_ptr[connfd].conninfo->https_ssl_have_conned = false;
+    session_params_ptr[connfd].hostvar = run_params_ptr->hostvar;
+    session_params_ptr[connfd].client_sockaddr = client_sockaddr;
+}
+
+
+void new_https_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr, SSL_CTX * ctx)
+{
+    new_session(session_params_ptr, run_params_ptr, connfd);
+
+    session_params_ptr[connfd].conninfo->is_https = true;
+    session_params_ptr[connfd].conninfo->https_ssl_have_conned = false;
+    session_params_ptr[connfd].hostvar = run_params_ptr->hostvar;
+    session_params_ptr[connfd].client_sockaddr = client_sockaddr;
+
+    printf("run_param[connfd].hostvar: %s %s\n",
+           session_params_ptr[connfd].hostvar->host,
+           session_params_ptr[connfd].hostvar->doc_root);
+
+    SSL * ssl;
+    ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, connfd);
+}
+
+
+int accept_session(int listen_fd, unsigned int * cli_len)
+{
+    int connfd;
+
+    if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, cli_len)) < 0)
+    {
+        // 重启被中断的系统调用accept
+        if (errno == EINTR)
+            connfd = ACCEPT_CONTINUE_FLAG;
+            // accept返回前连接终止, SVR4实现
+        else if (errno == EPROTO)
+            connfd = ACCEPT_CONTINUE_FLAG;
+            // accept返回前连接终止, POSIX实现
+        else if (errno == ECONNABORTED)
+            connfd = ACCEPT_CONTINUE_FLAG;
+        else
+        {
+            printf("accept error!\n");
+            connfd = ACCEPT_CONTINUE_FLAG;
+            // exit(EXIT_FAILURE);
+        }
+
+    }
+
+    return connfd;
+
+}
+
+
+void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd)
+{
+    SSL * ssl;
+    ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, connfd);
+
+    if (SSL_accept(ssl) <= 0)
+    {
+        printf("#2 ssl accept error errno: %d\n", errno);
+        if (session_params_ptr[connfd].conninfo->https_ssl_have_conned)
+        {
+            printf("run_param[tmpConnFd].https_ssl_have_conned): true\n");
+            printf("tmpConnFd: %d\n", connfd);
+
+        }
+        else
+        {
+            printf("run_param[tmpConnFd].https_ssl_have_conned): false\n");
+            printf("tmpConnFd: %d\n", connfd);
+        }
+
+        close(connfd);
+    }
+    else
+    {
+        printf("ssl established %d\n", connfd);
+        session_params_ptr[connfd].conninfo->https_ssl_have_conned = true;
+        session_params_ptr[connfd].conninfo->ssl = ssl;
+    }
+}
 
 
 
-    int http_listen_fd, https_listen_fd, connfd, tmpConnFd, cli_len;
-    struct sockaddr_in client_sockaddr, http_server_sockaddr, https_server_sockaddr;
-    SSL_CTX * ctx;
-    // epoll
+void handle_session(void)
+{
+    int ep_fd_ready_count, ep_fd_index, connfd, tmpConnFd, cli_len;
     struct epoll_event * events;
     uint32_t tmpEvent;
-    int ep_fd_ready_count, ep_fd_index;
-    struct connConf connConfLimit;
-    struct connInfo * connSessionInfos;
-    struct SessionRunParams session_run_param[MAX_EPOLL_SIZE];
-    struct ParamsRun run_params;
-    char config_file_path[PATH_MAX] = "../conf/dagama.conf";
 
+    events = malloc(MAX_EPOLL_SIZE * sizeof(run_params.event) );
+    cli_len = sizeof(client_sockaddr);
+
+    while(1)
+    {
+        printf("----------------------\n");
+        ep_fd_ready_count = epoll_wait(run_params.epoll_fd, events, MAX_EPOLL_SIZE, -1);
+        for (ep_fd_index = 0; ep_fd_index < ep_fd_ready_count; ep_fd_index++)
+        {
+            tmpEvent = events[ep_fd_index].events;
+            tmpConnFd = events[ep_fd_index].data.fd;
+
+            if (tmpConnFd == http_listen_fd)
+            {
+                if (tmpEvent & EPOLLIN)
+                {
+                    printf("EVENT: http ready accept: %d\n", tmpConnFd);
+                    // 收到连接请求
+                    if ( (connfd = accept_session(http_listen_fd, &cli_len) ) < 0)
+                        continue;
+                    else
+                        new_http_session(session_run_param, &run_params, connfd, &client_sockaddr);
+                }
+            }
+            else if (tmpConnFd == https_listen_fd)
+            {
+                if (tmpEvent & EPOLLIN)
+                {
+                    printf("EVENT: https ready accept: %d\n", tmpConnFd);
+                    // 收到连接请求
+                    if ( (connfd = accept_session(https_listen_fd, &cli_len)) < 0)
+                        continue;
+                    else
+                        new_https_session(session_run_param, &run_params, connfd, &client_sockaddr, ctx);
+                }
+            }
+            else if (tmpConnFd >= 5)
+            {
+                // printf("recv data >= 5:\n");
+                // 有数据到达，可以读
+                if (tmpEvent & EPOLLIN)
+                {
+                    // https访问ssl未建立连接
+                    if (session_run_param[tmpConnFd].conninfo->is_https &&
+                        (! session_run_param[tmpConnFd].conninfo->https_ssl_have_conned)
+                            )
+                    {
+                        new_ssl_session(session_run_param, tmpConnFd);
+                    }
+                    else
+                    {
+                        if (session_run_param[tmpConnFd].conninfo->sessionStatus == SESSION_READ_HEADER)
+                        {
+                            session_run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_READ_READY;
+                            process_request(&(session_run_param[tmpConnFd]), &run_params);
+                        }
+                    }
+
+                }
+
+                // 可以写
+                if (tmpEvent & EPOLLOUT)
+                {
+                    // TODO 连接已经释放，临时处理这种情况
+                    if (session_run_param[tmpConnFd].conninfo == NULL)
+                        continue;
+                    if (session_run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE_HEADER ||
+                        session_run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE_BODY)
+                    {
+                        session_run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_WRITE_READY;
+                        process_request(&(session_run_param[tmpConnFd]), &run_params);
+                    }
+                }
+            }
+
+        }
+
+    }
+
+}
+
+
+void install_signal(void)
+{
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR)
+        err_exit("signal(SIGPIPE) error");
+    // TODO term信号
+}
+
+
+
+void get_run_params(int argc, char ** argv)
+{
     get_config_file_path(argc, argv, config_file_path);
-    printf("config_file_path: %s\n", config_file_path);
     run_params.host_count = get_config_host_num(config_file_path);
     run_params.hostvar = malloc(sizeof(struct hostVar) * run_params.host_count);
     init_config(run_params.hostvar, config_file_path);
+}
 
+
+
+void start_listen(void)
+{
     // 设置ssl
     init_openssl();
     ctx = create_context_ssl();
@@ -864,206 +1048,18 @@ int main(int argc, char ** argv) {
     run_params.event.data.fd = https_listen_fd;
     run_params.event.events = EPOLLIN;
     event_add(&(run_params.event), run_params.epoll_fd, https_listen_fd);
-
-    events = malloc(MAX_EPOLL_SIZE * sizeof(run_params.event) );
-
-    while(1)
-    {
-        cli_len = sizeof(client_sockaddr);
-        printf("wait event\n");
-        ep_fd_ready_count = epoll_wait(run_params.epoll_fd, events, MAX_EPOLL_SIZE, -1);
-        for (ep_fd_index = 0; ep_fd_index < ep_fd_ready_count; ep_fd_index++)
-        {
-            tmpEvent = events[ep_fd_index].events;
-            tmpConnFd = events[ep_fd_index].data.fd;
-
-            if (tmpConnFd == http_listen_fd)
-            {
-                if (tmpEvent & EPOLLIN)
-                {
-                    printf("EVENT: http ready accept: %d\n", tmpConnFd);
-                    // 收到连接请求
-                    if ( (connfd = accept(http_listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
-                    {
-                        // 重启被中断的系统调用accept
-                        if (errno == EINTR)
-                            continue;
-                            // accept返回前连接终止, SVR4实现
-                        else if (errno == EPROTO)
-                            continue;
-                            // accept返回前连接终止, POSIX实现
-                        else if (errno == ECONNABORTED)
-                            continue;
-                        else
-                        {
-                            printf("accept error!\n");
-                            exit(EXIT_FAILURE);
-                        }
-
-                    }
-
-
-                    memset(&(run_params.event), 0, sizeof(run_params.event));
-
-                    run_params.event.data.fd = connfd;
-                    run_params.event.events = EPOLLIN;
-                    event_add(&(run_params.event), run_params.epoll_fd, connfd);
-
-                    connSessionInfos = malloc(sizeof(struct connInfo));
-                    init_session(connSessionInfos);
-
-                    connSessionInfos->recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
-                    memset(connSessionInfos->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE );
-                    printf("receive conn:%d\n", connfd);
-
-                    connSessionInfos->connFd = connfd;
-                    connSessionInfos->connTransactions = 0;
-                    session_run_param[connfd].conninfo = connSessionInfos;
-
-                    session_run_param[connfd].conninfo->is_https = false;
-                    session_run_param[connfd].conninfo->https_ssl_have_conned = false;
-                    session_run_param[connfd].hostvar = run_params.hostvar;
-                    session_run_param[connfd].client_sockaddr = &client_sockaddr;
-                }
-            }
-            else if (tmpConnFd == https_listen_fd)
-            {
-                if (tmpEvent & EPOLLIN)
-                {
-                    printf("EVENT: https ready accept: %d\n", tmpConnFd);
-                    // 收到连接请求
-                    if ( (connfd = accept(https_listen_fd, (struct sockaddr *) &client_sockaddr, &cli_len)) < 0)
-                    {
-                        // 重启被中断的系统调用accept
-                        if (errno == EINTR)
-                            continue;
-                            // accept返回前连接终止, SVR4实现
-                        else if (errno == EPROTO)
-                            continue;
-                            // accept返回前连接终止, POSIX实现
-                        else if (errno == ECONNABORTED)
-                            continue;
-                        else
-                        {
-                            printf("accept error!\n");
-                            exit(EXIT_FAILURE);
-                        }
-
-                    }
-
-                    memset(&(run_params.event), 0, sizeof(run_params.event));
-
-                    run_params.event.data.fd = connfd;
-                    run_params.event.events = EPOLLIN;
-                    event_add(&(run_params.event), run_params.epoll_fd, connfd);
-
-                    connSessionInfos = malloc(sizeof(struct connInfo));
-                    init_session(connSessionInfos);
-
-                    connSessionInfos->recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
-                    memset(connSessionInfos->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE );
-                    printf("receive conn:%d\n", connfd);
-
-                    connSessionInfos->connFd = connfd;
-                    connSessionInfos->connTransactions = 0;
-                    session_run_param[connfd].conninfo = connSessionInfos;
-
-                    session_run_param[connfd].conninfo->is_https = true;
-                    session_run_param[connfd].conninfo->https_ssl_have_conned = false;
-                    session_run_param[connfd].hostvar = run_params.hostvar;
-                    session_run_param[connfd].client_sockaddr = &client_sockaddr;
-
-                    printf("run_param[connfd].hostvar: %s %s\n",
-                           session_run_param[connfd].hostvar->host,
-                           session_run_param[connfd].hostvar->doc_root);
-
-                    SSL * ssl;
-                    ssl = SSL_new(ctx);
-                    SSL_set_fd(ssl, connfd);
-                }
-            }
-            else if (tmpConnFd >= 5)
-            {
-                // printf("recv data >= 5:\n");
-                // 有数据到达，可以读
-                if (tmpEvent & EPOLLIN)
-                {
-                    // https访问ssl未建立连接
-                    if (session_run_param[tmpConnFd].conninfo->is_https &&
-                    (! session_run_param[tmpConnFd].conninfo->https_ssl_have_conned)
-                    )
-                    {
-                        SSL * ssl;
-                        ssl = SSL_new(ctx);
-                        SSL_set_fd(ssl, tmpConnFd);
+}
 
 
 
-                        if (SSL_accept(ssl) <= 0)
-                        {
-                            printf("#2 ssl accept error errno: %d\n", errno);
-                            if (session_run_param[tmpConnFd].conninfo->https_ssl_have_conned)
-                            {
-                                printf("run_param[tmpConnFd].https_ssl_have_conned): true\n");
-                                printf("tmpConnFd: %d\n", tmpConnFd);
 
-                            }
-                            else
-                            {
-                                printf("run_param[tmpConnFd].https_ssl_have_conned): false\n");
-                                printf("tmpConnFd: %d\n", tmpConnFd);
-                            }
+int main(int argc, char ** argv) {
+    // test_module(argc, argv);
 
-                            close(tmpConnFd);
-                        }
-                        else
-                        {
-                            printf("ssl established %d\n", tmpConnFd);
-                            session_run_param[tmpConnFd].conninfo->https_ssl_have_conned = true;
-                            session_run_param[tmpConnFd].conninfo->ssl = ssl;
-                        }
-                    }
-                    else
-                    {
-                        // printf("recv data >= 5-1-2:\n");
-                        if (session_run_param[tmpConnFd].conninfo->sessionStatus != SESSION_END)
-                        {
-                            printf("recv data >= 5-1-3:\n");
-                            session_run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_READ_READY;
-                            printf("EVENT: ready read: %d\n", tmpConnFd);
-                            process_request(&(session_run_param[tmpConnFd]), &run_params);
-                            printf("process_request done\n");
-                        }
-                    }
-
-                }
-
-                // 可以写
-                if (tmpEvent & EPOLLOUT)
-                {
-                     printf("recv data >= 5-2-1:\n");
-                     if (session_run_param[tmpConnFd].conninfo == NULL)
-                         continue;
-
-                    printf("run_param[tmpConnFd].conninfo->sessionStatus: %d %d\n",
-                           session_run_param[tmpConnFd].conninfo->sessionStatus, tmpConnFd);
-
-                    if (session_run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE_HEADER ||
-                            session_run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE_BODY)
-                    {
-                        printf("recv data >= 5-2-2:\n");
-                        session_run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_WRITE_READY;
-                        printf("EVENT: ready write: %d\n", tmpConnFd);
-                        process_request(&(session_run_param[tmpConnFd]), &run_params);
-                    }
-                }
-            }
-
-
-        }
-
-
-    }
-
+    install_signal();
+    get_run_params(argc, argv);
+    start_listen();
+    // 循环处理会话
+    handle_session();
 }
 
