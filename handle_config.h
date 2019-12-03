@@ -28,7 +28,8 @@
 #define CONFIG_FILE_KEY_SSLKEY          "ssl_key"
 #define CONFIG_FILE_KEY_UPSTREAM_TYPE   "upstream_type"
 #define CONFIG_FILE_KEY_UPSTREAM        "upstream"
-
+#define CONFIG_FILE_KEY_LOG_HOST_PATH   "log_host_path"
+#define CONFIG_FILE_KEY_LOG_LEVEL       "log_level"
 
 #define CONFIG_FILE_VALUE_FLAG_ON                   "on"
 #define CONFIG_FILE_VALUE_FLAG_OFF                  "off"
@@ -98,15 +99,25 @@ static struct config_host_kv defalt_config_host_kv = {
         .config_kv[12].key = "upstream",
         .config_kv[12].value = CONFIG_FILE_VALUE_NA,
 
-        .current_key_num = 13
+        .config_kv[13].key = "log_host_path",
+        .config_kv[13].value = "/home/liushan/mylab/tmp/dagama.log",
+
+        .config_kv[14].key = "log_level",
+        .config_kv[14].value = LOG_LEVEL_NOTICE,
+
+        .current_key_num = 15
 };
 
 
 bool get_value_by_key(struct config_key_value * config_kv_ptr, char * * ch, int num);
-int get_config_host_num(const char *);
-void init_config(struct hostVar * host_var_ptr, char * config_file_path);
-void init_host_run_params(struct SessionRunParams * [], struct hostVar * [], int);
+int get_config_host_num(const char * config_f_path);
+void init_config(struct hostVar * host_var_ptr, char * config_f_path);
 void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mimebook_len);
 void get_all_host_config(struct config_all_host_kv * all_host_kv);
 void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar *);
+
+void get_or_open_file(struct FileOpenBook  * file_open_book, const char * file_path, FILE ** f);
+void init_open_file_book(struct FileOpenBook  * file_open_book);
+
+void test_hehe(void);
 #endif //DAGAMA_HANDLE_CONFIG_H

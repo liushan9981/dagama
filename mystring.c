@@ -116,7 +116,8 @@ int str_split(const char *str_ori, char ch_split, char str_tgt[][MAX_STR_SPLIT_S
 {
     int str_ori_ch_index;
     int str_index, ch_pos;
-    bool flag = false;
+
+    memset(str_tgt, 0, sizeof(char) *MAX_STR_SPLIT_SIZE * ch_num);
 
     for (str_ori_ch_index = 0, str_index = 0, ch_pos = 0; str_ori_ch_index < strlen(str_ori); str_ori_ch_index++)
     {
@@ -131,17 +132,11 @@ int str_split(const char *str_ori, char ch_split, char str_tgt[][MAX_STR_SPLIT_S
             str_tgt[str_index][ch_pos] = '\0';
             str_index++;
             ch_pos = 0;
-            flag = true;
         }
         else
         {
-            // 刚分割的第一个字符是空格的，忽略
-            if (flag)
-                if (isblank(str_ori[str_ori_ch_index]) )
-                    continue;
             str_tgt[str_index][ch_pos] = str_ori[str_ori_ch_index];
             ch_pos++;
-            flag = false;
         }
     }
     str_tgt[str_index][ch_pos] = '\0';
@@ -151,3 +146,30 @@ int str_split(const char *str_ori, char ch_split, char str_tgt[][MAX_STR_SPLIT_S
 }
 
 
+// 优化分割字符串，新版本
+int str_split2(const char *str_ori, char ch_split, char * * str_tgt, int len1, int len2)
+{
+    const char * ch_start, * ch_end;
+    int copy_len, len1_index;
+    const int illegal_res = -1;
+
+    for (len1_index = 0, ch_start = ch_end = str_ori; ;len1_index++)
+    {
+        if ( (len1_index + 1) > len1)
+            return illegal_res;
+
+        while (*ch_end != ch_split && *ch_end != '\0')
+            ch_end++;
+
+        if ( (copy_len = ch_end - ch_start) > 0)
+        {
+            if ( (copy_len + 1) > len2)
+                return illegal_res;
+
+            strncpy(str_tgt[len1], ch_start, copy_len);
+            str_tgt[len1][copy_len] = '\0';
+            ch_start = ch_end;
+        }
+    }
+
+}

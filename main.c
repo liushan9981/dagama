@@ -75,12 +75,18 @@ void get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [], i
 }
 
 
-void parse_header_request(char * headers_recv, struct request_header * headers_request)
+void parse_header_request(struct SessionRunParams * session_params_ptr)
 {
     char line_char_s[4][MAX_STR_SPLIT_SIZE];
     char line_read[1024];
     int index, temp_index, char_s_count, header_index, header_value_index;
     bool flag = true;
+
+    char * headers_recv;
+    struct request_header * headers_request;
+
+    headers_recv = session_params_ptr->conninfo->header_buf;
+    headers_request = &(session_params_ptr->conninfo->header_request);
 
     for (index = 0, temp_index = 0, header_index = 0; index < strlen(headers_recv); index++)
     {
@@ -102,7 +108,14 @@ void parse_header_request(char * headers_recv, struct request_header * headers_r
             else
             {
                 char_s_count = str_split(line_read, ':', line_char_s, 4);
-                if (char_s_count == 2)
+                if (strcmp(line_char_s[0], "User-Agent") == 0)
+                {
+                    // TODO 长度写死
+                    strncpy(headers_request->user_agent, line_read + 11, 4096);
+                    str_strip(headers_request->user_agent);
+                    printf("debug user agent: %s\n", headers_request->user_agent);
+                }
+                else if (char_s_count == 2)
                 {
                     strcpy(headers_request->headers[header_index][0], line_char_s[0]);
                     strcpy(headers_request->headers[header_index][1], line_char_s[1]);
@@ -162,7 +175,6 @@ void process_request_get_header(struct SessionRunParams * session_params_ptr)
     memset(session_params_ptr->conninfo->header_buf, 0, (size_t) MAX_HEADER_RESPONSE_SIZE);
     memset(read_buffer, 0, sizeof(read_buffer));
 
-    printf("now read data\n");
     printf("connfd: %d\n", session_params_ptr->conninfo->connFd);
     if ( (session_params_ptr->conninfo->is_https) )
         len = SSL_read(session_params_ptr->conninfo->ssl, read_buffer, buffer_size - (size_t)1);
@@ -290,7 +302,7 @@ void get_host_var_by_header(struct SessionRunParams * session_params_ptr,
 
 void process_request_get_response_header(struct SessionRunParams * session_params_ptr, struct ParamsRun * run_params_ptr)
 {
-    struct request_header header_request;
+    struct request_header * header_request;
     // char response[4096];
     char ch_temp[1024];
     struct stat statbuf;
@@ -309,21 +321,23 @@ void process_request_get_response_header(struct SessionRunParams * session_param
             .status_desc = "OK"
     };
 
-    parse_header_request(session_params_ptr->conninfo->header_buf, &header_request);
-    get_host_var_by_header(session_params_ptr, &header_request, run_params_ptr);
+    header_request = &(session_params_ptr->conninfo->header_request);
+
+    parse_header_request(session_params_ptr);
+    get_host_var_by_header(session_params_ptr, header_request, run_params_ptr);
 
     printf("debug2: docroot:%s\n", session_params_ptr->hostvar->doc_root);
     flag_temp = false;
     for (index_temp = 0; index_temp < session_params_ptr->hostvar->method_allowed_len; index_temp++)
-        if (strcmp(session_params_ptr->hostvar->method_allowed[index_temp], header_request.method) == 0)
+        if (strcmp(session_params_ptr->hostvar->method_allowed[index_temp], header_request->method) == 0)
         {
             flag_temp = true;
             break;
         }
 
-    if (str_endwith(header_request.uri, ".php"))
+    if (str_endwith(header_request->uri, ".php"))
     {
-        sprintf(request_file, "%s/%s", session_params_ptr->hostvar->doc_root, header_request.uri);
+        sprintf(request_file, "%s/%s", session_params_ptr->hostvar->doc_root, header_request->uri);
         is_fastcgi = true;
     }
     else if (!flag_temp)
@@ -331,15 +345,15 @@ void process_request_get_response_header(struct SessionRunParams * session_param
         SET_RESPONSE_STATUS_405(header_resonse);
         strcpy(request_file, session_params_ptr->hostvar->request_file_405);
     }
-    else if (strcmp(header_request.method, "GET") == 0)
+    else if (strcmp(header_request->method, "GET") == 0)
     {
         // 访问的uri是目录的，重写到该目录下的index文件
-        if (header_request.uri[strlen(header_request.uri) - 1] == '/')
+        if (header_request->uri[strlen(header_request->uri) - 1] == '/')
         {
-            sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request.uri, session_params_ptr->hostvar->file_indexs[0]);
+            sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request->uri, session_params_ptr->hostvar->file_indexs[0]);
             if (access(request_file, F_OK) == -1)
             {
-                sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request.uri, session_params_ptr->hostvar->file_indexs[1]);
+                sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request->uri, session_params_ptr->hostvar->file_indexs[1]);
                 if (access(request_file, F_OK) == -1)
                 {
                     SET_RESPONSE_STATUS_403(header_resonse);
@@ -359,7 +373,7 @@ void process_request_get_response_header(struct SessionRunParams * session_param
         }
         else
         {
-            sprintf(request_file, "%s/%s", session_params_ptr->hostvar->doc_root, header_request.uri);
+            sprintf(request_file, "%s/%s", session_params_ptr->hostvar->doc_root, header_request->uri);
             printf("request_file: %s\n", request_file);
             // 根据文件是否存在，重新拼接请求文件，生成状态码
             // 文件存在
@@ -397,7 +411,7 @@ void process_request_get_response_header(struct SessionRunParams * session_param
 
 
     }
-    else if (strcmp(header_request.method, "POST") == 0)
+    else if (strcmp(header_request->method, "POST") == 0)
     {
         printf("POST is not finished yet!\n");
     }
@@ -449,49 +463,46 @@ void process_request_get_response_header(struct SessionRunParams * session_param
 }
 
 
-void pr_client_info(struct SessionRunParams *session_params_ptr)
+void get_client_ip(struct SessionRunParams * session_params_ptr)
 {
     char cli_addr_buff[INET_ADDRSTRLEN];
-    struct sockaddr_in cli_sockaddr, srv_sockaddr;
-    int cli_sockaddr_len, srv_sockaddr_len;
-    char addr_buf[INET_ADDRSTRLEN];
+    strncpy(session_params_ptr->accessLog.client_ip,
+            inet_ntop(AF_INET, &session_params_ptr->client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
+            16);
+}
 
-    srv_sockaddr_len = sizeof(srv_sockaddr);
-    if (getsockname(session_params_ptr->conninfo->connFd, (struct sockaddr *) &srv_sockaddr, &srv_sockaddr_len) == -1)
-        printf("getsockname() error!\n");
+
+void get_access_log(struct SessionRunParams * session_params_ptr)
+{
+    char response_bytes[16];
+    char * log_msg_ptr;
+    log_msg_ptr = session_params_ptr->accessLog.log_msg;
+
+    snprintf(response_bytes, 16, "%lld", session_params_ptr->accessLog.response_bytes);
+
+    if ( (strlen(session_params_ptr->conninfo->header_request.user_agent) + strlen(session_params_ptr->accessLog.client_ip) + strlen(response_bytes) + 2) > 4096)
+        strncpy(session_params_ptr->accessLog.log_msg, "log too long", 4096);
     else
     {
-        printf("local ip: %s", inet_ntop(AF_INET, &srv_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
-        printf(" local port: %d\n", ntohs(srv_sockaddr.sin_port));
+        strncpy(log_msg_ptr, session_params_ptr->accessLog.client_ip, 4096);
+        strcat(log_msg_ptr, LOG_SPLIT_STR);
+        strncat(log_msg_ptr, session_params_ptr->conninfo->header_request.user_agent,
+                strlen(session_params_ptr->conninfo->header_request.user_agent) );
+        strcat(log_msg_ptr, LOG_SPLIT_STR);
+        strncat(log_msg_ptr, response_bytes, strlen(response_bytes) );
     }
-
-    cli_sockaddr_len = sizeof(cli_sockaddr);
-    if (getpeername(session_params_ptr->conninfo->connFd, (struct sockaddr *) &cli_sockaddr, &cli_sockaddr_len) == -1)
-        printf("getpeername() error!\n");
-    else
-    {
-        printf("peer ip: %s", inet_ntop(AF_INET, &cli_sockaddr.sin_addr, addr_buf, INET_ADDRSTRLEN));
-        printf(" peer port: %d\n", ntohs(cli_sockaddr.sin_port));
-    }
-
-    printf("response header:\n%s", session_params_ptr->conninfo->header_response);
-
-    printf("Connection from client: %s:%d\n",
-           inet_ntop(AF_INET, &session_params_ptr->client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
-           ntohs(session_params_ptr->client_sockaddr->sin_port));
 }
 
 
 void process_request_response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr)
 {
     int write_len;
-
     process_request_get_response_header(session_params_ptr, run_params_ptr);
 
     if (session_params_ptr->conninfo == NULL)
         return;
 
-    pr_client_info(session_params_ptr);
+    get_client_ip(session_params_ptr);
 
     // 发送响应头信息
     if (session_params_ptr->conninfo->is_https)
@@ -511,6 +522,7 @@ void process_request_response_header(struct SessionRunParams *session_params_ptr
     else
     {
         printf("writen header res: %d\n", write_len);
+        session_params_ptr->accessLog.response_bytes = write_len;
         session_params_ptr->conninfo->sessionStatus = SESSION_RESPONSE_BODY;
     }
 
@@ -521,8 +533,9 @@ void process_request_response_header(struct SessionRunParams *session_params_ptr
 void process_request_response_data(struct SessionRunParams *session_params_ptr)
 {
     ssize_t buffer_size = 4096, read_buffer_size;
-    char send_buffer[buffer_size];
+    char send_buffer[buffer_size], log_level_notice[] = LOG_LEVEL_NOTICE;
     int res_io;
+
 
     if ( (read_buffer_size = read(session_params_ptr->conninfo->localFileFd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
     {
@@ -531,9 +544,7 @@ void process_request_response_data(struct SessionRunParams *session_params_ptr)
         else
             res_io = writen(session_params_ptr->conninfo->connFd, send_buffer, read_buffer_size);
 
-
         if (res_io  == -1)
-            // if ( (res_io = write(connSessionInfo->connFd, send_buffer, read_buffer_size) ) < 0)
         {
             printf("writen body failed, continue\n");
             session_close(session_params_ptr);
@@ -541,18 +552,24 @@ void process_request_response_data(struct SessionRunParams *session_params_ptr)
         }
         else if (res_io == read_buffer_size)
         {
-            // printf("writen body full, res: %d\n", res_io);
+            session_params_ptr->accessLog.response_bytes += res_io;
         }
         else
         {
+            session_params_ptr->accessLog.response_bytes += res_io;
             printf("writen body not full, res: %d read_buffer_size: %ld\n", res_io, read_buffer_size);
         }
     }
     else if (read_buffer_size == 0)
     {
-        printf("finish response session\n");
         (session_params_ptr->conninfo->connTransactions)++;
-        printf("session count: %d\n", session_params_ptr->conninfo->connTransactions);
+        // printf("session count: %d\n", session_params_ptr->conninfo->connTransactions);
+
+
+        get_access_log(session_params_ptr);
+        write_log(log_level_notice, session_params_ptr->hostvar->log_level_host, session_params_ptr->accessLog.log_msg,
+                  session_params_ptr->hostvar->f_host_log);
+
         if (session_params_ptr->conninfo->sessionRShutdown == SESSION_RSHUTDOWN)
             // 读取输入时，已经处理recv_buf
             session_close(session_params_ptr);
@@ -571,10 +588,14 @@ void process_request_response_data(struct SessionRunParams *session_params_ptr)
 
 void process_request(struct SessionRunParams * session_params_ptr, struct ParamsRun * run_params_ptr)
 {
-    printf("session status: %d localfile_fd: %d\n", session_params_ptr->conninfo->sessionStatus,
-            session_params_ptr->conninfo->localFileFd);
+    printf("session_status: %d\n", session_params_ptr->conninfo->sessionRcvData);
 
-    if (session_params_ptr->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
+    if (session_params_ptr->conninfo->sessionRcvData == SESSION_RST)
+    {
+        printf("recv rst event now close session\n");
+        session_close(session_params_ptr);
+    }
+    else if (session_params_ptr->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
     {
         if (session_params_ptr->conninfo->sessionStatus == SESSION_READ_HEADER)
         {
@@ -582,7 +603,7 @@ void process_request(struct SessionRunParams * session_params_ptr, struct Params
             if (session_params_ptr->conninfo != NULL && session_params_ptr->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
             {
                 run_params_ptr->event.data.fd = session_params_ptr->conninfo->connFd;
-                run_params_ptr->event.events = EPOLLOUT;
+                run_params_ptr->event.events = EPOLLOUT|EPOLLHUP;
                 event_update(&(run_params_ptr->event), run_params_ptr->epoll_fd, session_params_ptr->conninfo->connFd);
             }
         }
@@ -614,13 +635,10 @@ void process_request(struct SessionRunParams * session_params_ptr, struct Params
 int create_listen_sock(int port, struct sockaddr_in * server_sockaddr)
 {
     int listen_fd;
-    // struct sockaddr_in server_sockaddr;
     const int myqueue = 100;
 
     bzero(server_sockaddr, sizeof(*server_sockaddr));
     listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-
-    printf("listen_fd: %d\n", listen_fd);
 
     server_sockaddr->sin_family = AF_INET;
     server_sockaddr->sin_port =  htons(port);
@@ -717,7 +735,7 @@ void get_app_cwdir(int argc, char ** argv, char * app_cwdir)
 }
 
 
-void get_config_file_path(int argc, char ** argv, char * config_file_path)
+void get_config_file_path(int argc, char ** argv)
 {
     char dest_path2[PATH_MAX];
     char * join_str = "/";
@@ -738,14 +756,6 @@ void get_config_file_path(int argc, char ** argv, char * config_file_path)
     strncat(dest_path2, config_file_path, strlen(config_file_path) );
 
     strncpy(config_file_path, dest_path2, PATH_MAX);
-}
-
-
-void test_module(int argc, char ** argv)
-{
-
-
-    exit(EXIT_SUCCESS);
 }
 
 
@@ -932,7 +942,6 @@ void handle_session(void)
 
     while(1)
     {
-        printf("----------------------\n");
         ep_fd_ready_count = epoll_wait(run_params.epoll_fd, events, MAX_EPOLL_SIZE, -1);
         for (ep_fd_index = 0; ep_fd_index < ep_fd_ready_count; ep_fd_index++)
         {
@@ -965,10 +974,11 @@ void handle_session(void)
             }
             else if (tmpConnFd >= 5)
             {
-                // printf("recv data >= 5:\n");
+                printf("recv data >= 5:\n");
                 // 有数据到达，可以读
                 if (tmpEvent & EPOLLIN)
                 {
+                    printf("debug recv EPOLLIN\n");
                     // https访问ssl未建立连接
                     if (session_run_param[tmpConnFd].conninfo->is_https &&
                         (! session_run_param[tmpConnFd].conninfo->https_ssl_have_conned)
@@ -987,9 +997,19 @@ void handle_session(void)
 
                 }
 
+                if (tmpEvent & EPOLLHUP)
+                {
+                    printf("debug recv EPOLLHUP\n");
+                    if (session_run_param[tmpConnFd].conninfo == NULL)
+                        continue;
+                    session_run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_RST;
+                    process_request(&(session_run_param[tmpConnFd]), &run_params);
+                }
+
                 // 可以写
                 if (tmpEvent & EPOLLOUT)
                 {
+                    printf("debug recv EPOLLOUT\n");
                     // TODO 连接已经释放，临时处理这种情况
                     if (session_run_param[tmpConnFd].conninfo == NULL)
                         continue;
@@ -1000,12 +1020,21 @@ void handle_session(void)
                         process_request(&(session_run_param[tmpConnFd]), &run_params);
                     }
                 }
+
             }
 
         }
 
     }
 
+}
+
+
+
+
+static void sig_pipe(int signo)
+{
+    printf("recv SIGPIPE\n");
 }
 
 
@@ -1020,7 +1049,9 @@ void install_signal(void)
 
 void get_run_params(int argc, char ** argv)
 {
-    get_config_file_path(argc, argv, config_file_path);
+    get_config_file_path(argc, argv);
+    printf("config file path: %s\n", config_file_path);
+
     run_params.host_count = get_config_host_num(config_file_path);
     run_params.hostvar = malloc(sizeof(struct hostVar) * run_params.host_count);
     init_config(run_params.hostvar, config_file_path);
@@ -1051,6 +1082,12 @@ void start_listen(void)
 }
 
 
+
+
+void test_module(int argc, char ** argv)
+{
+
+}
 
 
 int main(int argc, char ** argv) {

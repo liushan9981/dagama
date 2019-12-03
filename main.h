@@ -13,6 +13,8 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
+#include "write_log.h"
+
 #define SET_RESPONSE_STATUS_200(header_resonse)  header_resonse.status = 200; strcpy(header_resonse.status_desc, "OK")
 #define SET_RESPONSE_STATUS_403(header_resonse)  header_resonse.status = 403; strcpy(header_resonse.status_desc, "forbidden")
 #define SET_RESPONSE_STATUS_404(header_resonse)  header_resonse.status = 404; strcpy(header_resonse.status_desc, "file not found")
@@ -33,6 +35,7 @@
 #define SESSION_READ_HEADER 1
 #define SESSION_RESPONSE_HEADER 2
 #define SESSION_RESPONSE_BODY 3
+#define SESSION_RST 4
 
 
 // 是否收到数据
@@ -44,7 +47,7 @@
 #define SESSION_RNSHUTDOWN 0
 #define SESSION_RSHUTDOWN 1
 
-
+#define LOG_SPLIT_STR "    "
 
 
 
@@ -54,6 +57,7 @@ struct request_header {
     char uri[1024];
     char http_version[32];
     char headers[100][2][1024];
+    char user_agent[4096];
     int headers_len;
 };
 
@@ -94,23 +98,38 @@ struct connInfo {
     unsigned int sessionStatus;
     unsigned int sessionRShutdown;
     unsigned int sessionRcvData;
+    struct request_header header_request;
 
     bool is_https;
     bool https_ssl_have_conned;
     SSL * ssl;
 };
 
+//typedef struct FileOpenBook {
+//    char file_path[PATH_MAX];
+//    FILE * f;
+//} FileOpenBook;
+
+
+struct FileOpenBook {
+        char file_path[PATH_MAX];
+        FILE * f;
+};
+
 
 struct hostVar {
-    char host[PATH_MAX];
-    char doc_root[PATH_MAX];
-    char file_indexs[MAX_HEADER_FILE_INDEX_NUM][PATH_MAX];
-    int file_indexs_len;
-    char method_allowed[MAX_HEADER_METHOD_ALLOW_NUM][MAX_HEADER_METHOD_ALLOW_SIZE];
-    int method_allowed_len;
-    char request_file_403[PATH_MAX];
-    char request_file_404[PATH_MAX];
-    char request_file_405[PATH_MAX];
+    char   host[PATH_MAX];
+    char   doc_root[PATH_MAX];
+    char   file_indexs[MAX_HEADER_FILE_INDEX_NUM][PATH_MAX];
+    int    file_indexs_len;
+    char   method_allowed[MAX_HEADER_METHOD_ALLOW_NUM][MAX_HEADER_METHOD_ALLOW_SIZE];
+    int    method_allowed_len;
+    char   request_file_403[PATH_MAX];
+    char   request_file_404[PATH_MAX];
+    char   request_file_405[PATH_MAX];
+    char   log_host_path[PATH_MAX];
+    FILE * f_host_log;
+    char   log_level_host[LOG_LEVEL_MAX_LEN];
     struct mimedict mimebook[MAX_MIMEBOOK_SIZE];
 };
 
@@ -123,13 +142,20 @@ struct ParamsRun {
     struct epoll_event event;
 };
 
+typedef struct AccessLog {
+    char client_ip[16];
+    long long response_bytes;
+    char user_agent[4096];
+    int http_status;
+    char log_msg[4096];
+} AccessLog;
 
 struct SessionRunParams {
     struct connInfo * conninfo;
     struct sockaddr_in * client_sockaddr;
     struct hostVar * hostvar;
+    AccessLog accessLog;
 };
-
 
 
 
@@ -140,6 +166,9 @@ static SSL_CTX * ctx;
 static char config_file_path[PATH_MAX] = "../conf/dagama.conf";
 static struct sockaddr_in http_server_sockaddr, https_server_sockaddr;
 static struct sockaddr_in client_sockaddr;
+
+
+
 
 
 // ssl
@@ -160,7 +189,7 @@ void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd);
 
 void get_value_by_header(const char * header, const char * header_key, char * header_value);
 void session_close(struct SessionRunParams *session_params_ptr);
-void get_config_file_path(int argc, char ** argv, char * config_file_path);
+void get_config_file_path(int argc, char ** argv);
 
 void process_request(struct SessionRunParams *, struct ParamsRun *);
 
@@ -177,7 +206,7 @@ void pr_client_info(struct SessionRunParams *session_params_ptr);
 
 void get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [], int mimebook_len,
                                  struct response_header * header_resonse);
-void parse_header_request(char * headers_recv, struct request_header * headers_request);
+void parse_header_request(struct SessionRunParams * session_params_ptr);
 void init_session(struct connInfo * connSessionInfo);
 int create_listen_sock(int port, struct sockaddr_in * server_sockaddr);
 void test_module(int argc, char ** argv);
@@ -187,4 +216,8 @@ void get_run_params(int argc, char ** argv);
 void start_listen(void);
 void handle_session(void);
 
+void get_access_log(struct SessionRunParams * session_params_ptr);
+void get_client_ip(struct SessionRunParams * session_params_ptr);
+
+static void sig_pipe(int signo);
 #endif //DAGAMA_MAIN_H

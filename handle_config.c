@@ -114,7 +114,7 @@ void  get_mimebook(const char * mime_file, struct mimedict mimebook [], int mime
 }
 
 
-int get_config_host_num(const char * config_file_path)
+int get_config_host_num(const char * config_f_path)
 {
     char line[CONFIG_FILE_LINE_MAX_SIZE];
     char host_key_pre[CONFIG_FILE_LINE_MAX_SIZE];
@@ -124,18 +124,14 @@ int get_config_host_num(const char * config_file_path)
     strncpy(host_key_pre, CONFIG_FILE_KEY_HOST, CONFIG_FILE_LINE_MAX_SIZE);
     strncat(host_key_pre, ":", CONFIG_FILE_LINE_MAX_SIZE - strlen(host_key_pre) );
 
-    printf("host_key_pre: %s\n", host_key_pre);
-
-    if ( (f = fopen(config_file_path, "r") ) == NULL)
+    if ( (f = fopen(config_f_path, "r") ) == NULL)
         err_exit("can't open config file\n");
-
 
     while (fgets(line, CONFIG_FILE_LINE_MAX_SIZE, f) != NULL)
         if (str_startwith(line, CONFIG_FILE_KEY_HOST) )
             host_num_count++;
 
     fclose(f);
-
     return host_num_count;
 }
 
@@ -183,24 +179,61 @@ void get_all_host_config(struct config_all_host_kv * all_host_kv)
 }
 
 
+
+void get_or_open_file(struct FileOpenBook  * file_open_book, const char * file_path, FILE ** f)
+{
+    int index;
+
+    for (index = 0; index < CONFIG_FILE_HOST_MAX_KEY_NUM; index++)
+        if (strcmp(file_open_book[index].file_path, file_path) == 0)
+        {
+            *f = file_open_book[index].f;
+            return;
+        }
+
+    if ( (*f = fopen(file_path, "a") ) != NULL)
+        for (index = 0; index < CONFIG_FILE_HOST_MAX_KEY_NUM; index++)
+            if (strlen(file_open_book[index].file_path) == 0)
+            {
+                strncpy(file_open_book[index].file_path, file_path, PATH_MAX);
+                file_open_book[index].f = *f;
+                return;
+            }
+}
+
+
+void init_open_file_book(struct FileOpenBook file_open_book [])
+{
+    int index;
+
+    for (index = 0; index < CONFIG_FILE_HOST_MAX_KEY_NUM; index++)
+    {
+         file_open_book[index].file_path[0] = '\0';
+         file_open_book[index].f = NULL;
+    }
+}
+
+
 void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar * host_var_ptr)
 {
-    int tmp_index_host, tmp_len, tmp_split_index;
-    char * tmp_key, * tmp_value;
+    int tmp_index_host, tmp_split_index;
     struct hostVar * cur_host_var_ptr;
     struct config_host_kv * cur_config_host_kv_ptr;
     char temp_splited_value[1024][MAX_STR_SPLIT_SIZE];
     char * tmp_str, * ori_ptr;
+    struct FileOpenBook * file_open_book;
+
+    file_open_book = malloc(sizeof(struct FileOpenBook) * CONFIG_FILE_HOST_MAX_KEY_NUM);
+    init_open_file_book(file_open_book);
 
     ori_ptr = malloc(sizeof(char) * CONFIG_FILE_LINE_MAX_SIZE);
     tmp_str = ori_ptr;
 
     for (tmp_index_host = 0; tmp_index_host < all_host_kv->host_num; tmp_index_host++)
     {
+
         cur_host_var_ptr = host_var_ptr + tmp_index_host;
         cur_config_host_kv_ptr = all_host_kv->host_config_kv + tmp_index_host;
-
-        printf("# Host: %d\n", tmp_index_host);
 
         strncpy(tmp_str, CONFIG_FILE_KEY_HOST, CONFIG_FILE_LINE_MAX_SIZE);
         if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
@@ -208,16 +241,12 @@ void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar * h
         strncpy(cur_host_var_ptr->host, tmp_str, PATH_MAX);
         str_strip(cur_host_var_ptr->host);
 
-        printf("host: %s\n", cur_host_var_ptr->host);
-
         tmp_str = ori_ptr;
         strncpy(tmp_str, CONFIG_FILE_KEY_DOCROOT, CONFIG_FILE_LINE_MAX_SIZE);
         if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
             get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
         strncpy(cur_host_var_ptr->doc_root, tmp_str, PATH_MAX);
         str_strip(cur_host_var_ptr->doc_root);
-
-        printf("doc root: %s\n", cur_host_var_ptr->doc_root);
 
         tmp_str = ori_ptr;
         strncpy(tmp_str, CONFIG_FILE_KEY_MIMEFILE, CONFIG_FILE_LINE_MAX_SIZE);
@@ -235,13 +264,13 @@ void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar * h
             get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
 
         cur_host_var_ptr->method_allowed_len = str_split(tmp_str, CONFIG_FILE_ITEM_SPLIT_CH, temp_splited_value, 1024);
+
         for (tmp_split_index = 0; tmp_split_index < cur_host_var_ptr->method_allowed_len; tmp_split_index++)
         {
             str_strip(temp_splited_value[tmp_split_index]);
             strncpy(cur_host_var_ptr->method_allowed[tmp_split_index], temp_splited_value[tmp_split_index],
                     MAX_HEADER_METHOD_ALLOW_SIZE);
         }
-
 
         tmp_str = ori_ptr;
         strncpy(tmp_str, CONFIG_FILE_KEY_INDEX_FILE, CONFIG_FILE_LINE_MAX_SIZE);
@@ -275,44 +304,66 @@ void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar * h
         strncpy(cur_host_var_ptr->request_file_405, tmp_str, PATH_MAX);
         str_strip(cur_host_var_ptr->request_file_405);
 
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_LOG_HOST_PATH, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        strncpy(cur_host_var_ptr->log_host_path, tmp_str, PATH_MAX);
+        str_strip(cur_host_var_ptr->log_host_path);
+        printf("log_host_path: %s\n", cur_host_var_ptr->log_host_path);
+
+        get_or_open_file(file_open_book, cur_host_var_ptr->log_host_path, &(cur_host_var_ptr->f_host_log) );
+        if ( cur_host_var_ptr->f_host_log == NULL)
+        {
+            fprintf(stderr, "open log file: %s failed\n", cur_host_var_ptr->log_host_path);
+            exit(EXIT_FAILURE);
+        }
+
+        tmp_str = ori_ptr;
+        strncpy(tmp_str, CONFIG_FILE_KEY_LOG_LEVEL, CONFIG_FILE_LINE_MAX_SIZE);
+        if (! get_value_by_key(cur_config_host_kv_ptr->config_kv, &tmp_str, cur_config_host_kv_ptr->current_key_num) )
+            get_value_by_key(defalt_config_host_kv.config_kv, &tmp_str, defalt_config_host_kv.current_key_num);
+        strncpy(cur_host_var_ptr->log_level_host, tmp_str, LOG_LEVEL_MAX_LEN);
+        str_strip(cur_host_var_ptr->log_level_host);
+        printf("log_level_host: %s\n", cur_host_var_ptr->log_level_host);
+
     }
 
 }
 
 
-void init_config(struct hostVar * host_var_ptr, char * config_file_path)
+void init_config(struct hostVar * host_var_ptr, char * config_f_path)
 {
     struct config_all_host_kv all_host_kv;
 
-    strncpy(all_host_kv.config_file_path, config_file_path, PATH_MAX);
-    all_host_kv.host_num = get_config_host_num(config_file_path);
+    strncpy(all_host_kv.config_file_path, config_f_path, PATH_MAX);
+    all_host_kv.host_num = get_config_host_num(config_f_path);
     all_host_kv.host_config_kv = (struct config_host_kv *) malloc(sizeof(struct config_host_kv) * all_host_kv.host_num);
     get_all_host_config(&all_host_kv);
     set_host_config(&all_host_kv, host_var_ptr);
 
-
     // 调试用，打印出来所有配置的值
-    int index, index2;
-    printf("----------------\n");
-    for (index = 0; index < 3; index++)
-    {
-        printf("host: %s\n", host_var_ptr[index].host);
-        printf("doc root: %s\n", host_var_ptr[index].doc_root);
-        printf("mimebook: %s %s\n", host_var_ptr[index].mimebook[5].extension,
-                host_var_ptr[index].mimebook[5].content_type);
-        for (index2 = 0; index2 < host_var_ptr[index].file_indexs_len; index2++)
-        {
-            printf("index:%s\n",host_var_ptr[index].file_indexs[index2]);
-        }
-
-        for (index2 = 0; index2 < host_var_ptr[index].method_allowed_len; index2++)
-            printf("method allowed:%s\n", host_var_ptr[index].method_allowed[index2]);
-        printf("403:%s\n", host_var_ptr[index].request_file_403);
-        printf("404:%s\n", host_var_ptr[index].request_file_404);
-        printf("405:%s\n", host_var_ptr[index].request_file_405);
-        printf("*****\n");
-
-    }
+//    int index, index2;
+//    printf("----------------\n");
+//    for (index = 0; index < 3; index++)
+//    {
+//        printf("host: %s\n", host_var_ptr[index].host);
+//        printf("doc root: %s\n", host_var_ptr[index].doc_root);
+//        printf("mimebook: %s %s\n", host_var_ptr[index].mimebook[5].extension,
+//                host_var_ptr[index].mimebook[5].content_type);
+//        for (index2 = 0; index2 < host_var_ptr[index].file_indexs_len; index2++)
+//        {
+//            printf("index:%s\n",host_var_ptr[index].file_indexs[index2]);
+//        }
+//
+//        for (index2 = 0; index2 < host_var_ptr[index].method_allowed_len; index2++)
+//            printf("method allowed:%s\n", host_var_ptr[index].method_allowed[index2]);
+//        printf("403:%s\n", host_var_ptr[index].request_file_403);
+//        printf("404:%s\n", host_var_ptr[index].request_file_404);
+//        printf("405:%s\n", host_var_ptr[index].request_file_405);
+//        printf("*****\n");
+//
+//    }
 
     // exit(EXIT_SUCCESS);
 
