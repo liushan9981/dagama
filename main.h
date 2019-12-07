@@ -57,6 +57,7 @@ struct request_header {
     char uri[1024];
     char http_version[32];
     char headers[100][2][1024];
+    char all_header_line[100][1024];
     char user_agent[4096];
     int headers_len;
 };
@@ -88,6 +89,13 @@ struct connConf {
     int connMaxTransactions;
 };
 
+
+struct ResponseStatus {
+    bool is_header_illegal;
+    bool is_method_allowd;
+};
+
+
 struct connInfo {
     int connTransactions;
     int connFd;
@@ -100,6 +108,7 @@ struct connInfo {
     unsigned int sessionRcvData;
     struct request_header header_request;
 
+    struct ResponseStatus response_status;
     bool is_https;
     bool https_ssl_have_conned;
     SSL * ssl;
@@ -187,7 +196,7 @@ void new_https_session(struct SessionRunParams *session_params_ptr, struct Param
 void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd);
 
 
-void get_value_by_header(const char * header, const char * header_key, char * header_value);
+void get_header_value_by_key(const char *header, const char *header_key, char *header_value);
 void session_close(struct SessionRunParams *session_params_ptr);
 void get_config_file_path(int argc, char ** argv);
 

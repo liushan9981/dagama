@@ -146,6 +146,27 @@ int str_split(const char *str_ori, char ch_split, char str_tgt[][MAX_STR_SPLIT_S
 }
 
 
+int str_lstrip_str(char * dest, const char * str_match)
+{
+    char * dest_copy;
+    long long dest_len, str_match_len;
+
+    if (! str_startwith(dest, str_match) )
+        return 0;
+
+    dest_len = strlen(dest) + 1;
+    str_match_len = strlen(str_match) + 1;
+    if (str_match_len <= 1)
+        return 0;
+
+    dest_copy = malloc(sizeof(char) * dest_len);
+    memcpy(dest_copy, dest, dest_len);
+    memcpy(dest, dest_copy + str_match_len - 1, dest_len - str_match_len + 1);
+    free(dest_copy);
+    return str_match_len - 1;
+}
+
+
 // 优化分割字符串，新版本
 int str_split2(const char *str_ori, char ch_split, char * * str_tgt, int len1, int len2)
 {
