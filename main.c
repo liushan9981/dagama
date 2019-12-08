@@ -20,296 +20,31 @@
 #include "mysignal.h"
 #include "fastcgi.h"
 #include "mystring.h"
-#include "process_request.h"
+#include "process_request_fastcgi.h"
 #include "writen_readn_readline.h"
 #include "main.h"
 #include "handle_config.h"
 #include "myutils.h"
+#include "handle_request_header.h"
 
 
 
-void get_header_value_by_key(const char *header, const char *header_key, char *header_value)
-{
-    char * key_pre;
-    int header_key_len = strlen(header_key) + 1;
-
-    key_pre = malloc(sizeof(char) * (header_key_len + 1) );
-    memcpy(key_pre, header_key, header_key_len);
-    memcpy(header_value, header, strlen(header) + 1);
-    strcat(key_pre, ":");
-    str_lstrip_str(header_value, key_pre);
-    free(key_pre);
-    str_strip(header_value);
-}
-
-
-
-
-
-void get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [], int mimebook_len,
-                                   struct response_header * header_resonse)
-{
-    char extension_name_temp[EXTENSION_NAME_LENTH], extension_name[EXTENSION_NAME_LENTH];
-    int index;
-    int index_extension;
-
-    for (index = strlen(filepath) - 1, index_extension = 0; index >= 0; index--, index_extension++)
-    {
-        if (filepath[index] == '.')
-        {
-            extension_name_temp[index_extension] = '\0';
-            break;
-        }
-        else
-            extension_name_temp[index_extension] = filepath[index];
-    }
-
-    for (index = 0; index < index_extension; index++)
-        extension_name[index] =  extension_name_temp[index_extension - 1 - index];
-    extension_name[index] = '\0';
-
-    for (index = 0; index < mimebook_len; index++)
-    {
-        if (strcmp(extension_name, mimebook[index].extension) == 0)
-            strcpy(header_resonse->content_type, mimebook[index].content_type);
-    }
-
-}
-
-
-void get_header_request_method(struct SessionRunParams * session_params_ptr);
-
-void get_header_request_method(struct SessionRunParams * session_params_ptr)
-{
-    int index;
-    char * headers_recv;
-    char * method_allowed;
-    char (* all_method_allowed_ptr)[MAX_HEADER_METHOD_ALLOW_SIZE];
-
-    headers_recv = session_params_ptr->conninfo->header_buf;
-    all_method_allowed_ptr = session_params_ptr->hostvar->method_allowed;
-
-    for (index = 0; index < MAX_HEADER_METHOD_ALLOW_NUM; index++)
-        if (str_startwith(headers_recv, all_method_allowed_ptr[index]) )
-        {
-            printf("debug: get_header_request_method: cmp = 0\n");
-
-            memcpy(session_params_ptr->conninfo->header_request.method,
-                   all_method_allowed_ptr[index],
-                   strlen(all_method_allowed_ptr[index]) + 1
-            );
-            printf("after get_header_request_method:%s\n", session_params_ptr->conninfo->header_request.method);
-            return;
-        }
-
-    session_params_ptr->conninfo->response_status.is_method_allowd = false;
-}
-
-
-void get_header_request_uri(struct SessionRunParams * session_params_ptr);
-
-void get_header_request_uri(struct SessionRunParams * session_params_ptr)
-{
-    int index, char_s_count;
-    char * headers_recv;
-    const int first_line_max_len = 14 + PATH_MAX;
-    char first_line[first_line_max_len];
-    char line_char_s[4][MAX_STR_SPLIT_SIZE];
-    char * uri_ptr;
-
-    headers_recv = session_params_ptr->conninfo->header_buf;
-    // GET / HTTP/1.1
-    // 请求头，路径最大加上其他的值
-    for (index = 0; index < first_line_max_len; index++)
-    {
-        if (headers_recv[index] == '\r' && headers_recv[index + 1] == '\n')
-        {
-            memcpy(first_line, headers_recv, index);
-            first_line[index] = '\0';
-            break;
-        }
-    }
-
-    printf("first line:%s\n", first_line);
-    char_s_count = str_split(first_line, ' ', line_char_s, 4);
-    uri_ptr = line_char_s[1];
-
-    if (char_s_count == 3)
-    {
-        if (str_startwith(uri_ptr, "/") )
-        {
-            memcpy(session_params_ptr->conninfo->header_request.uri, uri_ptr, sizeof(uri_ptr) + 1);
-            printf("after get_header_request_uri uri:%s\n", session_params_ptr->conninfo->header_request.uri);
-            return;
-        }
-    }
-
-    session_params_ptr->conninfo->response_status.is_header_illegal = true;
-}
-
-
-void get_header_request_host(struct SessionRunParams * session_params_ptr);
-
-void get_header_request_host(struct SessionRunParams * session_params_ptr)
-{
-    char * headers_recv;
-}
-
-
-
-void get_header_request_all_line(struct SessionRunParams * session_params_ptr);
-
-void get_header_request_all_line(struct SessionRunParams * session_params_ptr)
-{
-    int header_index, line_start, line_end, copy_len;
-    char * headers_recv;
-    char (* all_header_line) [1024];
-
-    int index;
-
-    headers_recv = session_params_ptr->conninfo->header_buf;
-    all_header_line = session_params_ptr->conninfo->header_request.all_header_line;
-
-    printf("all_line: %s\n", headers_recv);
-
-    if (str_endwith(headers_recv, "\r\n\r\n") )
-        printf("str_endwith(headers_recv, rnrn)\n");
-
-    // TODO 100写死
-    for (header_index = 0, line_start = 0, line_end = 0;
-    header_index < 100, line_end < MAX_HEADER_RESPONSE_SIZE;
-    line_end++)
-    {
-        if (headers_recv[line_end] == '\r' && headers_recv[line_end + 1] == '\n')
-        {
-            printf("line_end: %d\nline_start: %d\n", line_end, line_start);
-
-            copy_len = line_end - line_start;
-            if (copy_len == 0)
-            {
-                printf("debug From get_header_request_all_line: copy_len == 0\n");
-                return;
-            }
-            printf("copy_len: %d\n", copy_len);
-
-            memcpy(all_header_line[header_index], headers_recv + line_start, copy_len);
-            printf("after memcpy line_end: %d\nline_start: %d\n", line_end, line_start);
-            all_header_line[header_index][copy_len] = '\0';
-            line_start = line_end + 2;
-            header_index++;
-        }
-    }
-
-    if (header_index == 100)
-    {
-        // TODO 请求头太大
-        printf("head request too large\n");
-    }
-
-    printf("get_header_request_all_line result:\n");
-    for (index = 0; index < header_index; index++)
-        printf("#%s#\n", all_header_line[index]);
-
-}
 
 
 void parse_header_request(struct SessionRunParams * session_params_ptr)
 {
-    char line_char_s[4][MAX_STR_SPLIT_SIZE];
-    char line_read[1024];
-    int index, temp_index, char_s_count, header_index, header_value_index;
-    bool flag = true;
-
-    char * headers_recv;
-    struct request_header * headers_request;
-
-    headers_recv = session_params_ptr->conninfo->header_buf;
-    headers_request = &(session_params_ptr->conninfo->header_request);
-
-
     get_header_request_all_line(session_params_ptr);
+
     get_header_request_method(session_params_ptr);
     get_header_request_uri(session_params_ptr);
-
-    for (index = 0, temp_index = 0, header_index = 0; index < strlen(headers_recv); index++)
-    {
-        if (headers_recv[index] == '\n')
-        {
-            line_read[temp_index] = '\0';
-
-            if (flag)
-            {
-                char_s_count = str_split(line_read, ' ', line_char_s, 4);
-                if (char_s_count == 3)
-                {
-                    strcpy(headers_request->method, line_char_s[0]);
-                    strcpy(headers_request->uri, line_char_s[1]);
-                    strcpy(headers_request->http_version, line_char_s[2]);
-                    flag = false;
-                }
-            }
-            else
-            {
-                char_s_count = str_split(line_read, ':', line_char_s, 4);
-                if (strcmp(line_char_s[0], "User-Agent") == 0)
-                {
-                    // TODO 长度写死
-                    strncpy(headers_request->user_agent, line_read + 11, 4096);
-                    str_strip(headers_request->user_agent);
-                    printf("debug user agent: %s\n", headers_request->user_agent);
-                }
-                else if (char_s_count == 2)
-                {
-                    strcpy(headers_request->headers[header_index][0], line_char_s[0]);
-                    strcpy(headers_request->headers[header_index][1], line_char_s[1]);
-
-                    printf("## recv headers: %s#%s\n",
-                           headers_request->headers[header_index][0], headers_request->headers[header_index][1]);
-
-                    if (strcmp(headers_request->headers[header_index][0], "Host") == 0)
-                        strcpy(headers_request->host, headers_request->headers[header_index][1]);
-
-                    header_index++;
-                }
-                else if (char_s_count > 2)
-                {
-                    strcpy(headers_request->headers[header_index][0], line_char_s[0]);
-                    get_header_value_by_key(line_read, headers_request->headers[header_index][0],
-                                            headers_request->headers[header_index][1]);
-
-                    printf("## recv headers > 2: %s#%s\n",
-                           headers_request->headers[header_index][0], headers_request->headers[header_index][1]);
-
-                    if (strcmp(headers_request->headers[header_index][0], "Host") == 0)
-                        strcpy(headers_request->host, headers_request->headers[header_index][1]);
-
-                    header_index++;
-                }
-                else
-                {
-                    fprintf(stderr, "recv error header: %s\n", line_read);
-                }
-
-            }
-
-            temp_index = 0;
-        }
-        else
-        {
-            line_read[temp_index] = headers_recv[index];
-            temp_index++;
-        }
-    }
-
-    headers_request->headers_len = header_index;
+    get_header_request_host(session_params_ptr);
+    get_header_request_ua(session_params_ptr);
 
 }
 
 
-
 void process_request_get_header(struct SessionRunParams * session_params_ptr)
 {
-    bool header_rcv = false;
     int index;
     ssize_t len;
     const int buffer_size = 4096;
@@ -318,7 +53,6 @@ void process_request_get_header(struct SessionRunParams * session_params_ptr)
     memset(session_params_ptr->conninfo->header_buf, 0, (size_t) MAX_HEADER_RESPONSE_SIZE);
     memset(read_buffer, 0, sizeof(read_buffer));
 
-    printf("connfd: %d\n", session_params_ptr->conninfo->connFd);
     if ( (session_params_ptr->conninfo->is_https) )
         len = SSL_read(session_params_ptr->conninfo->ssl, read_buffer, buffer_size - (size_t)1);
     else
@@ -385,43 +119,21 @@ void process_request_get_header(struct SessionRunParams * session_params_ptr)
         strncat(session_params_ptr->conninfo->recv_buf, read_buffer, buffer_size);
         // printf("recv_buf_index[%d]:\n%s\n", connSessionInfo->connFd, connSessionInfo->recv_buf);
 
-        if (str_endwith(session_params_ptr->conninfo->recv_buf, "\r\n\r\n") )
-            printf("debug2 session_params_ptr->conninfo->recv_buf end with rnrn\n");
-
         for (index = 0; index < strlen(session_params_ptr->conninfo->recv_buf); index++)
         {
             if (session_params_ptr->conninfo->recv_buf[index] == '\r' && session_params_ptr->conninfo->recv_buf[index+1] == '\n' &&
                 session_params_ptr->conninfo->recv_buf[index+2] == '\r' && session_params_ptr->conninfo->recv_buf[index+3] == '\n')
             {
-                // TODO 接受的数据rnrn丢失
-                strncpy(session_params_ptr->conninfo->header_buf, session_params_ptr->conninfo->recv_buf, index + 3);
-                if (str_endwith(session_params_ptr->conninfo->header_buf, "\r\n\r\n") )
-                    printf("session_params_ptr->conninfo->header_buf end with rnrn\n");
-                // printf("index: %d header info:\n%s\n", index, header_buf);
+                memcpy(session_params_ptr->conninfo->header_buf, session_params_ptr->conninfo->recv_buf, index + 4);
+                session_params_ptr->conninfo->header_buf[index + 4] = '\0';
                 // 清空接受的数据，粗暴的丢弃后面接收的数据
                 memset(session_params_ptr->conninfo->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE);
-                header_rcv = true;
+                session_params_ptr->conninfo->sessionStatus = SESSION_RESPONSE_HEADER;
                 break;
             }
 
         }
-
-        if (! header_rcv)
-            // 还没有读到头文件结束，下次继续读取
-            return;
         // 剩余可能还会有数据，暂不处理
-    }
-
-
-    if (header_rcv)
-    {
-        printf("have received header\n");
-
-        // 打印调试信息
-        printf("received:\n");
-        printf("%s", session_params_ptr->conninfo->header_buf);
-        // 读取头完成
-        session_params_ptr->conninfo->sessionStatus = SESSION_RESPONSE_HEADER;
     }
 
 }
@@ -449,168 +161,6 @@ void get_host_var_by_header(struct SessionRunParams * session_params_ptr,
 }
 
 
-void process_request_get_response_header(struct SessionRunParams * session_params_ptr, struct ParamsRun * run_params_ptr)
-{
-    struct request_header * header_request;
-    // char response[4096];
-    char ch_temp[1024];
-    struct stat statbuf;
-    char request_file[512];
-    int index_temp;
-    // bool flag_temp;
-    bool is_fastcgi = false;
-
-    struct response_header header_resonse = {
-            .http_version = "HTTP/1.1",
-            .content_type = "image/jpeg",
-            .content_length = 16,
-            .connection = "keep-alive",
-            .server = "Dagama",
-            .status = 200,
-            .status_desc = "OK"
-    };
-
-    header_request = &(session_params_ptr->conninfo->header_request);
-
-    parse_header_request(session_params_ptr);
-    get_host_var_by_header(session_params_ptr, header_request, run_params_ptr);
-
-    printf("debug2: docroot:%s\n", session_params_ptr->hostvar->doc_root);
-//    flag_temp = false;
-//    for (index_temp = 0; index_temp < session_params_ptr->hostvar->method_allowed_len; index_temp++)
-//        if (strcmp(session_params_ptr->hostvar->method_allowed[index_temp], header_request->method) == 0)
-//        {
-//            flag_temp = true;
-//            break;
-//        }
-
-    if (str_endwith(header_request->uri, ".php"))
-    {
-        sprintf(request_file, "%s/%s", session_params_ptr->hostvar->doc_root, header_request->uri);
-        is_fastcgi = true;
-    }
-    else if (! session_params_ptr->conninfo->response_status.is_method_allowd)
-    {
-        SET_RESPONSE_STATUS_405(header_resonse);
-        strcpy(request_file, session_params_ptr->hostvar->request_file_405);
-    }
-    else if (strcmp(header_request->method, "GET") == 0)
-    {
-        // 访问的uri是目录的，重写到该目录下的index文件
-        if (header_request->uri[strlen(header_request->uri) - 1] == '/')
-        {
-            sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request->uri, session_params_ptr->hostvar->file_indexs[0]);
-            if (access(request_file, F_OK) == -1)
-            {
-                sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request->uri, session_params_ptr->hostvar->file_indexs[1]);
-                if (access(request_file, F_OK) == -1)
-                {
-                    SET_RESPONSE_STATUS_403(header_resonse);
-                    strcpy(request_file, session_params_ptr->hostvar->request_file_403);
-                }
-                else
-                {
-                    SET_RESPONSE_STATUS_200(header_resonse);
-                }
-
-            }
-            else
-            {
-                SET_RESPONSE_STATUS_200(header_resonse);
-            }
-
-        }
-        else
-        {
-            sprintf(request_file, "%s/%s", session_params_ptr->hostvar->doc_root, header_request->uri);
-            printf("request_file: %s\n", request_file);
-            // 根据文件是否存在，重新拼接请求文件，生成状态码
-            // 文件存在
-            if (access(request_file, F_OK) != -1)
-            {
-                // 获取文件信息，如果失败则403
-                if (stat(request_file, &statbuf) != -1)
-                {
-                    // 如果为普通文件
-                    if (S_ISREG(statbuf.st_mode)) {
-                        SET_RESPONSE_STATUS_200(header_resonse);
-                    } else {
-                        SET_RESPONSE_STATUS_404(header_resonse);
-                        strcpy(request_file, session_params_ptr->hostvar->request_file_404);
-                    }
-                }
-                else
-                {
-                    printf("get file %s stat error\n", request_file);
-                    SET_RESPONSE_STATUS_403(header_resonse);
-                    strcpy(request_file, session_params_ptr->hostvar->request_file_403);
-                }
-
-            }
-                // 文件不存在,则404
-            else
-            {
-                SET_RESPONSE_STATUS_404(header_resonse);
-                strcpy(request_file, session_params_ptr->hostvar->request_file_404);
-            }
-
-            printf("request_file: %s\n", request_file);
-
-        }
-
-
-    }
-    else if (strcmp(header_request->method, "POST") == 0)
-    {
-        printf("POST is not finished yet!\n");
-    }
-
-
-    if (is_fastcgi)
-    {
-        process_request_fastcgi(session_params_ptr->conninfo->connFd, request_file);
-    }
-    else
-    {
-        printf("request_file: %s\n", request_file);
-
-        if (stat(request_file, &statbuf) != -1)
-            header_resonse.content_length = statbuf.st_size;
-        else {
-            printf("get statbuf error!\n");
-            // continue;
-        }
-
-        if ((session_params_ptr->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0) {
-            fprintf(stderr, "open file %s error!\n", request_file);
-            SET_RESPONSE_STATUS_403(header_resonse);
-            strcpy(request_file, session_params_ptr->hostvar->request_file_403);
-            if ((session_params_ptr->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0) {
-                fprintf(stderr, "open file %s error!\n", request_file);
-                session_close(session_params_ptr);
-                return;
-            }
-
-        }
-
-        get_contenttype_by_filepath(request_file, session_params_ptr->hostvar->mimebook, MAX_MIMEBOOK_SIZE,
-                                    &header_resonse);
-
-        // 拼接响应头
-        sprintf(session_params_ptr->conninfo->header_response, "%s %d %s\n", header_resonse.http_version, header_resonse.status,
-                header_resonse.status_desc);
-        sprintf(ch_temp, "Content-Type: %s\n", header_resonse.content_type);
-        strcat(session_params_ptr->conninfo->header_response, ch_temp);
-        sprintf(ch_temp, "Content-Length: %llu\n", header_resonse.content_length);
-        strcat(session_params_ptr->conninfo->header_response, ch_temp);
-        sprintf(ch_temp, "Connection: %s\n", header_resonse.connection);
-        strcat(session_params_ptr->conninfo->header_response, ch_temp);
-        sprintf(ch_temp, "Server: %s\n\n", header_resonse.server);
-        strcat(session_params_ptr->conninfo->header_response, ch_temp);
-    }
-
-}
-
 
 void get_client_ip(struct SessionRunParams * session_params_ptr)
 {
@@ -630,7 +180,7 @@ void get_access_log(struct SessionRunParams * session_params_ptr)
     snprintf(response_bytes, 16, "%lld", session_params_ptr->accessLog.response_bytes);
 
     if ( (
-            strlen(session_params_ptr->conninfo->header_request.user_agent) +
+            strlen(session_params_ptr->conninfo->hd_request.user_agent) +
             strlen(session_params_ptr->accessLog.client_ip) +
             strlen(response_bytes) + 2
             ) > 4096
@@ -640,8 +190,8 @@ void get_access_log(struct SessionRunParams * session_params_ptr)
     {
         strncpy(log_msg_ptr, session_params_ptr->accessLog.client_ip, 4096);
         strcat(log_msg_ptr, LOG_SPLIT_STR);
-        strncat(log_msg_ptr, session_params_ptr->conninfo->header_request.user_agent,
-                strlen(session_params_ptr->conninfo->header_request.user_agent) );
+        strncat(log_msg_ptr, session_params_ptr->conninfo->hd_request.user_agent,
+                strlen(session_params_ptr->conninfo->hd_request.user_agent) );
         strcat(log_msg_ptr, LOG_SPLIT_STR);
         strncat(log_msg_ptr, response_bytes, strlen(response_bytes) );
     }
@@ -651,12 +201,10 @@ void get_access_log(struct SessionRunParams * session_params_ptr)
 void process_request_response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr)
 {
     int write_len;
-    process_request_get_response_header(session_params_ptr, run_params_ptr);
+    get_response_header(session_params_ptr, run_params_ptr);
 
     if (session_params_ptr->conninfo == NULL)
         return;
-
-    get_client_ip(session_params_ptr);
 
     // 发送响应头信息
     if (session_params_ptr->conninfo->is_https)
@@ -943,6 +491,12 @@ void init_session(struct connInfo * connSessionInfo)
     connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
     connSessionInfo->response_status.is_header_illegal = false;
     connSessionInfo->response_status.is_method_allowd = true;
+
+    connSessionInfo->upstream_is_fastcgi = false;
+    connSessionInfo->upstream_is_local_http = false;
+    connSessionInfo->upstream_is_proxy_http = false;
+
+    connSessionInfo->is_request_file_set = false;
 }
 
 

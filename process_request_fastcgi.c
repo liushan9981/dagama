@@ -23,7 +23,7 @@
 #include "fastcgi.h"
 #include "mystring.h"
 #include "writen_readn_readline.h"
-#include "process_request.h"
+#include "process_request_fastcgi.h"
 
 struct response_header_fastcgi {
     char http_version[32];

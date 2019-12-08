@@ -15,10 +15,10 @@
 
 #include "write_log.h"
 
-#define SET_RESPONSE_STATUS_200(header_resonse)  header_resonse.status = 200; strcpy(header_resonse.status_desc, "OK")
-#define SET_RESPONSE_STATUS_403(header_resonse)  header_resonse.status = 403; strcpy(header_resonse.status_desc, "forbidden")
-#define SET_RESPONSE_STATUS_404(header_resonse)  header_resonse.status = 404; strcpy(header_resonse.status_desc, "file not found")
-#define SET_RESPONSE_STATUS_405(header_resonse)  header_resonse.status = 405; strcpy(header_resonse.status_desc, "method not allowed")
+#define SET_RESPONSE_STATUS_200(header_resonse)  header_resonse->status = 200; strcpy(header_resonse->status_desc, "OK")
+#define SET_RESPONSE_STATUS_403(header_resonse)  header_resonse->status = 403; strcpy(header_resonse->status_desc, "forbidden")
+#define SET_RESPONSE_STATUS_404(header_resonse)  header_resonse->status = 404; strcpy(header_resonse->status_desc, "file not found")
+#define SET_RESPONSE_STATUS_405(header_resonse)  header_resonse->status = 405; strcpy(header_resonse->status_desc, "method not allowed")
 
 
 #define EXTENSION_NAME_LENTH 8
@@ -30,6 +30,11 @@
 #define MAX_HEADER_RESPONSE_SIZE 4096
 
 #define ACCEPT_CONTINUE_FLAG -3
+
+
+#define HEADER_VALUE_NOT_AVAIABLE "NA"
+#define HEADER_METHOD_GET "GET"
+
 
 // 会话的状态
 #define SESSION_READ_HEADER 1
@@ -106,13 +111,24 @@ struct connInfo {
     unsigned int sessionStatus;
     unsigned int sessionRShutdown;
     unsigned int sessionRcvData;
-    struct request_header header_request;
+    struct request_header hd_request;
+    struct response_header hd_response;
 
+    char request_file[PATH_MAX];
+    bool is_request_file_set;
     struct ResponseStatus response_status;
     bool is_https;
+    bool upstream_is_fastcgi;
+    bool upstream_is_local_http;
+    bool upstream_is_proxy_http;
     bool https_ssl_have_conned;
     SSL * ssl;
 };
+
+
+static char * response_500_msg = "ops! Server 500 Error!";
+
+
 
 //typedef struct FileOpenBook {
 //    char file_path[PATH_MAX];
@@ -196,7 +212,7 @@ void new_https_session(struct SessionRunParams *session_params_ptr, struct Param
 void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd);
 
 
-void get_header_value_by_key(const char *header, const char *header_key, char *header_value);
+
 void session_close(struct SessionRunParams *session_params_ptr);
 void get_config_file_path(int argc, char ** argv);
 
@@ -206,15 +222,14 @@ void process_request(struct SessionRunParams *, struct ParamsRun *);
 void get_host_var_by_header(struct SessionRunParams * session_params_ptr,
         const struct request_header * header_request_ptr, struct ParamsRun *);
 void process_request_get_header(struct SessionRunParams *session_params_ptr);
-void process_request_get_response_header(struct SessionRunParams * session_params_ptr, struct ParamsRun *);
+void get_response_header(struct SessionRunParams * session_params_ptr, struct ParamsRun *);
 void process_request_response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun *);
 
 void process_request_response_data(struct SessionRunParams *session_params_ptr);
 
 void pr_client_info(struct SessionRunParams *session_params_ptr);
 
-void get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [], int mimebook_len,
-                                 struct response_header * header_resonse);
+
 void parse_header_request(struct SessionRunParams * session_params_ptr);
 void init_session(struct connInfo * connSessionInfo);
 int create_listen_sock(int port, struct sockaddr_in * server_sockaddr);
