@@ -230,6 +230,26 @@ void process_request_response_header(struct SessionRunParams *session_params_ptr
 
 }
 
+void session_fin_transaction(struct connInfo * connSessionInfo);
+void session_fin_transaction(struct connInfo * connSessionInfo)
+{
+    close(connSessionInfo->localFileFd);
+
+    // connSessionInfo->recv_buf = NULL;
+    connSessionInfo->localFileFd = -2;
+    connSessionInfo->sessionStatus = SESSION_READ_HEADER;
+//    connSessionInfo->sessionRShutdown = SESSION_RNSHUTDOWN;
+//    connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
+    connSessionInfo->response_status.is_header_illegal = false;
+    connSessionInfo->response_status.is_method_allowd = true;
+
+    connSessionInfo->upstream_is_fastcgi = false;
+    connSessionInfo->upstream_is_local_http = false;
+    connSessionInfo->upstream_is_proxy_http = false;
+
+    connSessionInfo->is_request_file_set = false;
+}
+
 
 
 void process_request_response_data(struct SessionRunParams *session_params_ptr)
@@ -278,9 +298,12 @@ void process_request_response_data(struct SessionRunParams *session_params_ptr)
         else
         {
             // 已经发送完毕，保持连接，等待下一个事务
-            session_params_ptr->conninfo->sessionStatus = SESSION_READ_HEADER;
-            close(session_params_ptr->conninfo->localFileFd);
-            session_params_ptr->conninfo->localFileFd = -2;
+            session_fin_transaction(session_params_ptr->conninfo);
+
+//            session_params_ptr->conninfo->sessionStatus = SESSION_READ_HEADER;
+//            close(session_params_ptr->conninfo->localFileFd);
+//            session_params_ptr->conninfo->localFileFd = -2;
+
         }
         return;
     }
