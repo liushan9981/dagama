@@ -176,8 +176,10 @@ void get_access_log(struct SessionRunParams * session_params_ptr)
     char response_bytes[16];
     char * log_msg_ptr;
     log_msg_ptr = session_params_ptr->accessLog.log_msg;
+    char status[4];
 
     snprintf(response_bytes, 16, "%lld", session_params_ptr->accessLog.response_bytes);
+    snprintf(status, 4, "%d", session_params_ptr->conninfo->hd_response.status);
 
     if ( (
             strlen(session_params_ptr->conninfo->hd_request.user_agent) +
@@ -190,10 +192,19 @@ void get_access_log(struct SessionRunParams * session_params_ptr)
     {
         strncpy(log_msg_ptr, session_params_ptr->accessLog.client_ip, 4096);
         strcat(log_msg_ptr, LOG_SPLIT_STR);
+
+        strncat(log_msg_ptr, session_params_ptr->conninfo->hd_request.uri,
+                strlen(session_params_ptr->conninfo->hd_request.uri) );
+        strcat(log_msg_ptr, LOG_SPLIT_STR);
+
         strncat(log_msg_ptr, session_params_ptr->conninfo->hd_request.user_agent,
                 strlen(session_params_ptr->conninfo->hd_request.user_agent) );
         strcat(log_msg_ptr, LOG_SPLIT_STR);
+
         strncat(log_msg_ptr, response_bytes, strlen(response_bytes) );
+        strcat(log_msg_ptr, LOG_SPLIT_STR);
+
+        strncat(log_msg_ptr, status, 3);
     }
 }
 

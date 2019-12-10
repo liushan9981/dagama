@@ -114,7 +114,7 @@ void get_header_request_uri(struct SessionRunParams * session_params_ptr)
     {
         if (str_startwith(uri_ptr, "/") )
         {
-            memcpy(session_params_ptr->conninfo->hd_request.uri, uri_ptr, sizeof(uri_ptr) + 1);
+            memcpy(session_params_ptr->conninfo->hd_request.uri, uri_ptr, strlen(uri_ptr) + 1);
             printf("after get_header_request_uri uri:%s\n", session_params_ptr->conninfo->hd_request.uri);
             return;
         }

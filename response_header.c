@@ -59,7 +59,7 @@ void get_response_header_get(struct SessionRunParams * session_params_ptr)
     request_file = session_params_ptr->conninfo->request_file;
 
     // 访问的uri是目录的，重写到该目录下的index文件
-    if (header_request->uri[strlen(header_request->uri) - 1] == '/')
+    if (str_endwith(header_request->uri, "/") )
     {
         sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request->uri, session_params_ptr->hostvar->file_indexs[0]);
         if (access(request_file, F_OK) == -1)
