@@ -219,8 +219,11 @@ void merge_response_header(struct SessionRunParams * session_params_ptr)
 {
     char ch_temp[1024];
     struct response_header * header_resonse;
-    header_resonse = &(session_params_ptr->conninfo->hd_response);
 
+    if (session_params_ptr->conninfo == NULL)
+        return;
+
+    header_resonse = &(session_params_ptr->conninfo->hd_response);
 
     // 拼接响应头
     sprintf(session_params_ptr->conninfo->header_response, "%s %d %s\n", header_resonse->http_version, header_resonse->status,
