@@ -215,7 +215,11 @@ void process_request_response_header(struct SessionRunParams *session_params_ptr
     get_response_header(session_params_ptr, run_params_ptr);
 
     if (session_params_ptr->conninfo == NULL)
+    {
+        printf("func->process_request_response_header: session_params_ptr->conninfo == NULL, now return\n");
         return;
+    }
+
 
     // 发送响应头信息
     if (session_params_ptr->conninfo->is_https)
@@ -257,8 +261,9 @@ void session_fin_transaction(struct connInfo * connSessionInfo)
     connSessionInfo->upstream_is_fastcgi = false;
     connSessionInfo->upstream_is_local_http = false;
     connSessionInfo->upstream_is_proxy_http = false;
+    memset(connSessionInfo->request_file, 0, sizeof(char) * PATH_MAX);
 
-    connSessionInfo->is_request_file_set = false;
+    // connSessionInfo->is_request_file_set = false;
 }
 
 
@@ -530,7 +535,9 @@ void init_session(struct connInfo * connSessionInfo)
     connSessionInfo->upstream_is_local_http = false;
     connSessionInfo->upstream_is_proxy_http = false;
 
-    connSessionInfo->is_request_file_set = false;
+    memset(connSessionInfo->request_file, 0, sizeof(char) * PATH_MAX);
+    connSessionInfo->hd_response.status = 0;
+    connSessionInfo->redirect_count = 0;
 }
 
 

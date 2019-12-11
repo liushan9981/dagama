@@ -16,5 +16,8 @@ void merge_response_header(struct SessionRunParams * session_params_ptr);
 void get_local_http_response_header(struct SessionRunParams * session_params_ptr);
 bool get_response_header_check_method_is_allowed(struct SessionRunParams * session_params_ptr);
 bool get_response_header_check_client_is_allowed(struct SessionRunParams * session_params_ptr);
+void open_request_file(struct SessionRunParams * session_params_ptr);
+bool get_index_file(struct SessionRunParams * session_params_ptr);
+bool check_file_path_accessible(char * file_path);
 
 #endif //DAGAMA_RESPONSE_HEADER_H

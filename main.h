@@ -19,7 +19,7 @@
 #define SET_RESPONSE_STATUS_403(header_resonse)  header_resonse->status = 403; strcpy(header_resonse->status_desc, "forbidden")
 #define SET_RESPONSE_STATUS_404(header_resonse)  header_resonse->status = 404; strcpy(header_resonse->status_desc, "file not found")
 #define SET_RESPONSE_STATUS_405(header_resonse)  header_resonse->status = 405; strcpy(header_resonse->status_desc, "method not allowed")
-
+#define SET_RESPONSE_STATUS_500(header_resonse)  header_resonse->status = 500; strcpy(header_resonse->status_desc, "Internal Server Error")
 
 #define EXTENSION_NAME_LENTH 8
 #define MAX_EPOLL_SIZE 10000
@@ -77,6 +77,10 @@ struct response_header {
     char status_desc[64];
 };
 
+typedef struct ResponseData {
+    char data_buf[4096];
+} ResponseData;
+
 
 struct mimedict {
     char extension[8];
@@ -102,27 +106,28 @@ struct ResponseStatus {
 
 
 struct connInfo {
-    int connTransactions;
-    int connFd;
-    int localFileFd;
-    char * recv_buf;
-    char header_buf[MAX_HEADER_RESPONSE_SIZE];
-    char header_response[MAX_HEADER_RESPONSE_SIZE];
-    unsigned int sessionStatus;
-    unsigned int sessionRShutdown;
-    unsigned int sessionRcvData;
-    struct request_header hd_request;
+    int                    connTransactions;
+    int                    connFd;
+    int                    localFileFd;
+    char *                 recv_buf;
+    char                   header_buf[MAX_HEADER_RESPONSE_SIZE];
+    char                   header_response[MAX_HEADER_RESPONSE_SIZE];
+    unsigned int           sessionStatus;
+    unsigned int           sessionRShutdown;
+    unsigned int           sessionRcvData;
+    struct request_header  hd_request;
     struct response_header hd_response;
-
-    char request_file[PATH_MAX];
-    bool is_request_file_set;
-    struct ResponseStatus response_status;
-    bool is_https;
-    bool upstream_is_fastcgi;
-    bool upstream_is_local_http;
-    bool upstream_is_proxy_http;
-    bool https_ssl_have_conned;
-    SSL * ssl;
+    char                   request_file[PATH_MAX];
+    int                    redirect_count;
+    // bool                   is_request_file_set;
+    struct ResponseStatus  response_status;
+    bool                   is_https;
+    bool                   upstream_is_fastcgi;
+    bool                   upstream_is_local_http;
+    bool                   upstream_is_proxy_http;
+    bool                   https_ssl_have_conned;
+    ResponseData           response_data;
+    SSL *                  ssl;
 };
 
 

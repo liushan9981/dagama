@@ -46,13 +46,56 @@ void get_contenttype_by_filepath(char * filepath, struct mimedict mimebook [], i
 
 
 
-void get_response_header_get(struct SessionRunParams * session_params_ptr)
+bool check_file_path_accessible(char * file_path)
+{
+    struct stat statbuf;
+
+    if (access(file_path, F_OK) != -1 && stat(file_path, &statbuf) != -1 && S_ISREG(statbuf.st_mode) )
+        return true;
+    return false;
+}
+
+
+
+bool get_index_file(struct SessionRunParams * session_params_ptr)
+{
+    int index_file_count, index;
+    char (* file_index) [PATH_MAX];
+    char file_path[PATH_MAX];
+
+    index_file_count = session_params_ptr->hostvar->file_indexs_len;
+    file_index = session_params_ptr->hostvar->file_indexs;
+    printf("get_index_file, index_file_count: %d\n", index_file_count);
+
+
+    for (index = 0; index < index_file_count; index++)
+    {
+        sprintf(file_path, "%s/%s%s",
+                session_params_ptr->hostvar->doc_root,
+                session_params_ptr->conninfo->hd_request.uri,
+                file_index[index]);
+
+        if (check_file_path_accessible(file_path) )
+        {
+            printf("index file is accessable: %s\n", file_path);
+            memcpy(session_params_ptr->conninfo->request_file, file_path, strlen(file_path) + 1);
+            printf("get_index_file: after memcpy:%s\n", session_params_ptr->conninfo->request_file);
+            return true;
+        }
+        else
+            printf("index file is not accessable: %s\n", file_path);
+
+    }
+
+    return false;
+}
+
+
+void get_response_header_file_path(struct SessionRunParams * session_params_ptr)
 {
     struct request_header * header_request;
-    struct stat statbuf;
     struct response_header * header_resonse;
     char * request_file;
-
 
     header_resonse = &(session_params_ptr->conninfo->hd_response);
     header_request = &(session_params_ptr->conninfo->hd_request);
@@ -61,69 +104,16 @@ void get_response_header_get(struct SessionRunParams * session_params_ptr)
     // 访问的uri是目录的，重写到该目录下的index文件
     if (str_endwith(header_request->uri, "/") )
     {
-        sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request->uri, session_params_ptr->hostvar->file_indexs[0]);
-        if (access(request_file, F_OK) == -1)
+        if (! get_index_file(session_params_ptr) )
         {
-            sprintf(request_file, "%s/%s%s", session_params_ptr->hostvar->doc_root, header_request->uri, session_params_ptr->hostvar->file_indexs[1]);
-            if (access(request_file, F_OK) == -1)
-            {
-                SET_RESPONSE_STATUS_403(header_resonse);
-                strcpy(request_file, session_params_ptr->hostvar->request_file_403);
-            }
-            else
-            {
-                SET_RESPONSE_STATUS_200(header_resonse);
-            }
-
-        }
-        else
-        {
-            SET_RESPONSE_STATUS_200(header_resonse);
+            SET_RESPONSE_STATUS_403(header_resonse);
+            strcpy(request_file, session_params_ptr->hostvar->request_file_403);
         }
 
     }
     else
-    {
         sprintf(request_file, "%s/%s", session_params_ptr->hostvar->doc_root, header_request->uri);
-        printf("request_file: %s\n", request_file);
-        // 根据文件是否存在，重新拼接请求文件，生成状态码
-        // 文件存在
-        if (access(request_file, F_OK) != -1)
-        {
-            // 获取文件信息，如果失败则403
-            if (stat(request_file, &statbuf) != -1)
-            {
-                // 如果为普通文件
-                if (S_ISREG(statbuf.st_mode)) {
-                    SET_RESPONSE_STATUS_200(header_resonse);
-                } else {
-                    SET_RESPONSE_STATUS_404(header_resonse);
-                    strcpy(request_file, session_params_ptr->hostvar->request_file_404);
-                }
-            }
-            else
-            {
-                printf("get file %s stat error\n", request_file);
-                SET_RESPONSE_STATUS_403(header_resonse);
-                strcpy(request_file, session_params_ptr->hostvar->request_file_403);
-            }
-
-        }
-            // 文件不存在,则404
-        else
-        {
-            SET_RESPONSE_STATUS_404(header_resonse);
-            strcpy(request_file, session_params_ptr->hostvar->request_file_404);
-        }
-
-        printf("request_file: %s\n", request_file);
-
-    }
-
-    session_params_ptr->conninfo->is_request_file_set = true;
-
 }
-
 
 
 
@@ -135,15 +125,13 @@ bool get_response_header_check_client_is_allowed(struct SessionRunParams * sessi
     header_resonse = &(session_params_ptr->conninfo->hd_response);
     request_file = session_params_ptr->conninfo->request_file;
 
-    printf("1 session_params_ptr->accessLog.client_ip: %s\n", session_params_ptr->accessLog.client_ip);
-    printf("strcmp(session_params_ptr->accessLog.client_ip, \"127.0.0.1\"): %d", strcmp(session_params_ptr->accessLog.client_ip, "127.0.0.1") );
     if (strcmp(session_params_ptr->accessLog.client_ip, "127.0.0.1") != 0)
     {
         SET_RESPONSE_STATUS_403(header_resonse);
         strcpy(request_file, session_params_ptr->hostvar->request_file_403);
-        session_params_ptr->conninfo->is_request_file_set = true;
+//        session_params_ptr->conninfo->is_request_file_set = true;
         memcpy(session_params_ptr->conninfo->hd_request.method, HEADER_METHOD_GET, strlen(HEADER_METHOD_GET) + 1);
-        printf("client ip is now allowed\n");
+        printf("client ip is not allowed\n");
         printf("request file: %s\n", request_file);
 
         return false;
@@ -168,49 +156,100 @@ bool get_response_header_check_method_is_allowed(struct SessionRunParams * sessi
     {
         SET_RESPONSE_STATUS_405(header_resonse);
         strcpy(request_file, session_params_ptr->hostvar->request_file_405);
-        session_params_ptr->conninfo->is_request_file_set = true;
+        // session_params_ptr->conninfo->is_request_file_set = true;
         memcpy(session_params_ptr->conninfo->hd_request.method, HEADER_METHOD_GET, strlen(HEADER_METHOD_GET) + 1);
+        return false;
     }
 
-    return session_params_ptr->conninfo->is_request_file_set;
+    return true;
 }
 
 
+bool is_request_file_set(struct SessionRunParams * session_params_ptr)
+{
+    return (strlen(session_params_ptr->conninfo->request_file) > 0)?true: false;
+}
+
+
+void open_request_file(struct SessionRunParams * session_params_ptr)
+{
+    char * request_file;
+    struct response_header * header_resonse;
+    int * redirect_count;
+    struct stat statbuf;
+
+    request_file = session_params_ptr->conninfo->request_file;
+    header_resonse = &(session_params_ptr->conninfo->hd_response);
+    redirect_count = &(session_params_ptr->conninfo->redirect_count);
+
+    if (*redirect_count > 10)
+    {
+        // SET 500
+        session_params_ptr->conninfo->localFileFd = -3;
+        memcpy(session_params_ptr->conninfo->response_data.data_buf, response_500_msg, strlen(response_500_msg) + 1);
+        SET_RESPONSE_STATUS_500(header_resonse);
+        return;
+    }
+
+    if ( (session_params_ptr->conninfo->localFileFd = open(request_file, O_RDONLY)) > 0 &&
+    stat(request_file, &statbuf) != -1)
+    {
+        if (header_resonse->status == 0)
+        {
+            SET_RESPONSE_STATUS_200(header_resonse);
+        }
+        header_resonse->content_length = statbuf.st_size;
+    }
+    else
+    {
+        (*redirect_count)++;
+
+        if (errno == EACCES)
+        {
+            fprintf(stderr, "open file %s %s\n", request_file, strerror(EACCES) );
+            SET_RESPONSE_STATUS_403(header_resonse);
+            strcpy(request_file, session_params_ptr->hostvar->request_file_403);
+        }
+        else if (errno == ENOENT)
+        {
+            fprintf(stderr, "open file %s %s\n", request_file, strerror(ENOENT) );
+            SET_RESPONSE_STATUS_404(header_resonse);
+            strcpy(request_file, session_params_ptr->hostvar->request_file_404);
+        }
+    }
+
+}
 
 
 void get_local_http_response_header(struct SessionRunParams * session_params_ptr)
 {
     char * request_file;
-    struct stat statbuf;
     struct response_header * header_resonse;
+    int local_file_fd;
+
+    local_file_fd = session_params_ptr->conninfo->localFileFd;
+    request_file = session_params_ptr->conninfo->request_file;
     header_resonse = &(session_params_ptr->conninfo->hd_response);
 
-    request_file = session_params_ptr->conninfo->request_file;
-
-    printf("now is get_local_http_response_header()\n");
-    printf("request_file: %s\n", request_file);
-
-    if (stat(request_file, &statbuf) != -1)
-        header_resonse->content_length = statbuf.st_size;
-    else {
-        printf("get statbuf error!\n");
-        // continue;
+    if (! is_request_file_set(session_params_ptr) && local_file_fd != -3)
+    {
+        get_response_header_file_path(session_params_ptr);
+        printf("func->get_local_http_response_header: request_file1: %s\n", request_file);
     }
 
-    if ((session_params_ptr->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0) {
-        fprintf(stderr, "open file %s error!\n", request_file);
-        SET_RESPONSE_STATUS_403(header_resonse);
-        strcpy(request_file, session_params_ptr->hostvar->request_file_403);
-        if ((session_params_ptr->conninfo->localFileFd = open(request_file, O_RDONLY)) < 0) {
-            fprintf(stderr, "open file %s error!\n", request_file);
-            session_close(session_params_ptr);
-            return;
-        }
-
+    while (local_file_fd != -3 && local_file_fd < 0)
+    {
+        open_request_file(session_params_ptr);
+        local_file_fd = session_params_ptr->conninfo->localFileFd;
     }
+
+    printf("func->get_local_http_response_header: request_file2: %s\n", request_file);
+    printf("func->get_local_http_response_header: local_fd: %d\n", session_params_ptr->conninfo->localFileFd);
 
     get_contenttype_by_filepath(request_file, session_params_ptr->hostvar->mimebook, MAX_MIMEBOOK_SIZE, header_resonse);
+
 }
+
 
 
 
@@ -255,22 +294,10 @@ void get_upstream_type(struct SessionRunParams * session_params_ptr)
 }
 
 
-
-
 void set_default_header_response(struct SessionRunParams * session_params_ptr)
 {
     struct response_header * header_resonse;
     header_resonse = &(session_params_ptr->conninfo->hd_response);
-
-//    struct response_header header_resonse = {
-//            .http_version = "HTTP/1.1",
-//            .content_type = "image/jpeg",
-//            .content_length = 16,
-//            .connection = "keep-alive",
-//            .server = "Dagama",
-//            .status = 200,
-//            .status_desc = "OK"
-//    };
 
     memcpy(header_resonse->http_version, "HTTP/1.1", strlen("HTTP/1.1") + 1);
     memcpy(header_resonse->connection, "keep-alive", strlen("keep-alive") + 1);
@@ -306,8 +333,6 @@ void get_response_header(struct SessionRunParams * session_params_ptr, struct Pa
         printf("check now is session_params_ptr->conninfo->upstream_is_local_http\n");
         if (strcmp(session_params_ptr->conninfo->hd_request.method, HEADER_METHOD_GET) == 0)
         {
-            if (! session_params_ptr->conninfo->is_request_file_set)
-                get_response_header_get(session_params_ptr);
             get_local_http_response_header(session_params_ptr);
             merge_response_header(session_params_ptr);
         }
@@ -322,3 +347,4 @@ void get_response_header(struct SessionRunParams * session_params_ptr, struct Pa
     }
 
 }
+
