@@ -268,62 +268,110 @@ void session_fin_transaction(struct connInfo * connSessionInfo)
 
 
 
-void process_request_response_data(struct SessionRunParams *session_params_ptr)
+
+void process_request_fin_response(struct SessionRunParams *session_params_ptr)
 {
-    ssize_t buffer_size = 4096, read_buffer_size;
-    char send_buffer[buffer_size], log_level_notice[] = LOG_LEVEL_NOTICE;
-    int res_io;
+    char log_level_notice[] = LOG_LEVEL_NOTICE;
+
+    // (session_params_ptr->conninfo->connTransactions)++;
+    // printf("session count: %d\n", session_params_ptr->conninfo->connTransactions);
 
 
-    if ( (read_buffer_size = read(session_params_ptr->conninfo->localFileFd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
+    get_access_log(session_params_ptr);
+    write_log(log_level_notice, session_params_ptr->hostvar->log_level_host, session_params_ptr->accessLog.log_msg,
+              session_params_ptr->hostvar->f_host_log);
+
+    if (session_params_ptr->conninfo->sessionRShutdown == SESSION_RSHUTDOWN)
+        // 读取输入时，已经处理recv_buf
+        session_close(session_params_ptr);
+    else
     {
-        if (session_params_ptr->conninfo->is_https)
-            res_io = SSL_write(session_params_ptr->conninfo->ssl, send_buffer, read_buffer_size);
-        else
-            res_io = writen(session_params_ptr->conninfo->connFd, send_buffer, read_buffer_size);
-
-        if (res_io  == -1)
-        {
-            printf("writen body failed, continue\n");
-            session_close(session_params_ptr);
-            return;
-        }
-        else if (res_io == read_buffer_size)
-        {
-            session_params_ptr->accessLog.response_bytes += res_io;
-        }
-        else
-        {
-            session_params_ptr->accessLog.response_bytes += res_io;
-            printf("writen body not full, res: %d read_buffer_size: %ld\n", res_io, read_buffer_size);
-        }
-    }
-    else if (read_buffer_size == 0)
-    {
-        (session_params_ptr->conninfo->connTransactions)++;
-        // printf("session count: %d\n", session_params_ptr->conninfo->connTransactions);
-
-
-        get_access_log(session_params_ptr);
-        write_log(log_level_notice, session_params_ptr->hostvar->log_level_host, session_params_ptr->accessLog.log_msg,
-                  session_params_ptr->hostvar->f_host_log);
-
-        if (session_params_ptr->conninfo->sessionRShutdown == SESSION_RSHUTDOWN)
-            // 读取输入时，已经处理recv_buf
-            session_close(session_params_ptr);
-        else
-        {
-            // 已经发送完毕，保持连接，等待下一个事务
-            session_fin_transaction(session_params_ptr->conninfo);
+        // 已经发送完毕，保持连接，等待下一个事务
+        session_fin_transaction(session_params_ptr->conninfo);
 
 //            session_params_ptr->conninfo->sessionStatus = SESSION_READ_HEADER;
 //            close(session_params_ptr->conninfo->localFileFd);
 //            session_params_ptr->conninfo->localFileFd = -2;
 
-        }
-        return;
     }
 
+
+}
+
+
+
+
+void write_response_data(struct SessionRunParams *session_params_ptr)
+{
+    ssize_t * read_buffer_size;
+    char * send_buffer;
+    // ssize_t buffer_size;
+
+//    ssize_t buffer_size = 4096, read_buffer_size;
+//    char send_buffer[buffer_size];
+    int res_io;
+
+    read_buffer_size = &(session_params_ptr->conninfo->response_data.read_buffer_size);
+    // buffer_size = session_params_ptr->conninfo->response_data.buffer_size;
+    send_buffer = session_params_ptr->conninfo->response_data.send_buffer;
+
+    if (session_params_ptr->conninfo->is_https)
+        res_io = SSL_write(session_params_ptr->conninfo->ssl, send_buffer, *read_buffer_size);
+    else
+        res_io = writen(session_params_ptr->conninfo->connFd, send_buffer, *read_buffer_size);
+
+    if (res_io  == -1)
+    {
+        printf("writen body failed, continue\n");
+        session_close(session_params_ptr);
+        return;
+    }
+    else if (res_io == *read_buffer_size)
+    {
+        session_params_ptr->accessLog.response_bytes += res_io;
+    }
+    else
+    {
+        session_params_ptr->accessLog.response_bytes += res_io;
+        printf("writen body not full, res: %d read_buffer_size: %ld\n", res_io, *read_buffer_size);
+    }
+}
+
+
+void process_request_response_500(struct SessionRunParams *session_params_ptr)
+{
+    ssize_t * read_buffer_size;
+    char * send_buffer, * send_buffer_500;
+
+    send_buffer = session_params_ptr->conninfo->response_data.send_buffer;
+    send_buffer_500 = session_params_ptr->conninfo->response_data.fallback_500_data_buf;
+    read_buffer_size = &(session_params_ptr->conninfo->response_data.read_buffer_size);
+    *read_buffer_size = strlen(send_buffer_500);
+    memcpy(send_buffer, send_buffer_500, *read_buffer_size);
+
+    write_response_data(session_params_ptr);
+    process_request_fin_response(session_params_ptr);
+}
+
+
+void process_request_response_data(struct SessionRunParams *session_params_ptr)
+{
+    ssize_t * read_buffer_size;
+    char * send_buffer;
+    ssize_t buffer_size;
+    int local_file_fd;
+
+    read_buffer_size = &(session_params_ptr->conninfo->response_data.read_buffer_size);
+    buffer_size = session_params_ptr->conninfo->response_data.buffer_size;
+    send_buffer = session_params_ptr->conninfo->response_data.send_buffer;
+    local_file_fd = session_params_ptr->conninfo->localFileFd;
+
+    if (local_file_fd == -3)
+        process_request_response_500(session_params_ptr);
+    else if ( (*read_buffer_size = read(local_file_fd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
+        write_response_data(session_params_ptr);
+    else if (*read_buffer_size == 0)
+        process_request_fin_response(session_params_ptr);
 }
 
 
@@ -538,6 +586,7 @@ void init_session(struct connInfo * connSessionInfo)
     memset(connSessionInfo->request_file, 0, sizeof(char) * PATH_MAX);
     connSessionInfo->hd_response.status = 0;
     connSessionInfo->redirect_count = 0;
+    connSessionInfo->response_data.buffer_size = 4096;
 }
 
 
@@ -585,7 +634,7 @@ void new_session(struct SessionRunParams *session_params_ptr, struct ParamsRun *
     printf("receive conn:%d\n", connfd);
 
     connSessionInfos->connFd = connfd;
-    connSessionInfos->connTransactions = 0;
+    // connSessionInfos->connTransactions = 0;
     session_params_ptr[connfd].conninfo = connSessionInfos;
 }
 

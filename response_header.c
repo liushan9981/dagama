@@ -170,6 +170,13 @@ bool is_request_file_set(struct SessionRunParams * session_params_ptr)
     return (strlen(session_params_ptr->conninfo->request_file) > 0)?true: false;
 }
 
+bool is_response_status_set(struct SessionRunParams * session_params_ptr);
+
+bool is_response_status_set(struct SessionRunParams * session_params_ptr)
+{
+    return (session_params_ptr->conninfo->hd_response.status == 0)?false: true;
+}
+
 
 void open_request_file(struct SessionRunParams * session_params_ptr)
 {
@@ -186,8 +193,9 @@ void open_request_file(struct SessionRunParams * session_params_ptr)
     {
         // SET 500
         session_params_ptr->conninfo->localFileFd = -3;
-        memcpy(session_params_ptr->conninfo->response_data.data_buf, response_500_msg, strlen(response_500_msg) + 1);
+        memcpy(session_params_ptr->conninfo->response_data.fallback_500_data_buf, response_500_msg, strlen(response_500_msg) + 1);
         SET_RESPONSE_STATUS_500(header_resonse);
+        session_params_ptr->conninfo->hd_response.content_length = strlen(response_500_msg);
         return;
     }
 
@@ -203,6 +211,9 @@ void open_request_file(struct SessionRunParams * session_params_ptr)
     else
     {
         (*redirect_count)++;
+
+        if (is_response_status_set(session_params_ptr) )
+            return;
 
         if (errno == EACCES)
         {

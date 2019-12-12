@@ -78,7 +78,10 @@ struct response_header {
 };
 
 typedef struct ResponseData {
-    char data_buf[4096];
+    char fallback_500_data_buf[4096];
+    char send_buffer[4096];
+    ssize_t read_buffer_size;
+    ssize_t buffer_size;
 } ResponseData;
 
 
@@ -94,11 +97,6 @@ struct DefaultReqFile {
 };
 
 
-struct connConf {
-    int connMaxTransactions;
-};
-
-
 struct ResponseStatus {
     bool is_header_illegal;
     bool is_method_allowd;
@@ -106,7 +104,7 @@ struct ResponseStatus {
 
 
 struct connInfo {
-    int                    connTransactions;
+    // int                    connTransactions;
     int                    connFd;
     int                    localFileFd;
     char *                 recv_buf;
@@ -231,7 +229,9 @@ void get_response_header(struct SessionRunParams * session_params_ptr, struct Pa
 void process_request_response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun *);
 
 void process_request_response_data(struct SessionRunParams *session_params_ptr);
-
+void process_request_fin_response(struct SessionRunParams *session_params_ptr);
+void process_request_response_500(struct SessionRunParams *session_params_ptr);
+void write_response_data(struct SessionRunParams *session_params_ptr);
 void pr_client_info(struct SessionRunParams *session_params_ptr);
 
 
