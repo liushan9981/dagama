@@ -25,54 +25,37 @@
 #include "main.h"
 #include "handle_config.h"
 #include "myutils.h"
-#include "handle_request_header.h"
+#include "request_header.h"
+#include "response_data.h"
+#include "session.h"
 
 
 
 
-
-void parse_header_request(struct SessionRunParams * session_params_ptr)
-{
-    get_header_request_all_line(session_params_ptr);
-
-    get_header_request_method(session_params_ptr);
-    get_header_request_uri(session_params_ptr);
-    get_header_request_host(session_params_ptr);
-    get_header_request_ua(session_params_ptr);
-
-}
-
-
-void process_request_get_header(struct SessionRunParams * session_params_ptr)
+void read_header(struct SessionRunParams *session_params_ptr)
 {
     int index;
     ssize_t len;
     const int buffer_size = 4096;
     char read_buffer[buffer_size];
 
-    memset(session_params_ptr->conninfo->header_buf, 0, (size_t) MAX_HEADER_RESPONSE_SIZE);
     memset(read_buffer, 0, sizeof(read_buffer));
 
-    if ( (session_params_ptr->conninfo->is_https) )
-        len = SSL_read(session_params_ptr->conninfo->ssl, read_buffer, buffer_size - (size_t)1);
+    if ( (session_params_ptr->session_info->is_https) )
+        len = SSL_read(session_params_ptr->session_info->ssl, read_buffer, buffer_size - (size_t)1);
     else
-        len = read(session_params_ptr->conninfo->connFd, read_buffer, buffer_size - (size_t)1);
+        len = read(session_params_ptr->session_info->connFd, read_buffer, buffer_size - (size_t)1);
 
 
     if ( len == 0)
     {
         // 之前已经读完请求头
-        if (session_params_ptr->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+        if (session_params_ptr->session_info->sessionStatus == SESSION_RESPONSE_HEADER)
         {
-//            printf("recv len 1: %ld\n", len);
-//            free(run_params->conninfo->recv_buf);
-//            run_params->conninfo->recv_buf = NULL;
-            session_params_ptr->conninfo->sessionRShutdown = SESSION_RSHUTDOWN;
+            session_params_ptr->session_info->sessionRShutdown = SESSION_RSHUTDOWN;
         }
-        else if (session_params_ptr->conninfo->sessionStatus == SESSION_READ_HEADER)
+        else if (session_params_ptr->session_info->sessionStatus == SESSION_READ_HEADER)
         {
-            printf("header recv error == 0\n");
-            // close(run_params->conninfo->connFd);
             session_close(session_params_ptr);
             printf("have closed session == 0\n");
         }
@@ -93,19 +76,16 @@ void process_request_get_header(struct SessionRunParams * session_params_ptr)
     }
     else if (len < 0)
     {
-        if (session_params_ptr->conninfo->sessionStatus == SESSION_READ_HEADER)
+        if (session_params_ptr->session_info->sessionStatus == SESSION_READ_HEADER)
         {
             printf("header recv error < 0\n");
-            // close(run_params->conninfo->connFd);
+            // close(run_params->session_info->connFd);
             session_close(session_params_ptr);
         }
-        else if (session_params_ptr->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+        else if (session_params_ptr->session_info->sessionStatus == SESSION_RESPONSE_HEADER)
         {
             printf("recv len 4: %ld\n", len);
-//            fprintf(stderr, "str_echo: read error\n");
-//            free(run_params->conninfo->recv_buf);
-//            run_params->conninfo->recv_buf = NULL;
-            session_params_ptr->conninfo->sessionRShutdown = SESSION_RSHUTDOWN;
+            session_params_ptr->session_info->sessionRShutdown = SESSION_RSHUTDOWN;
         }
 
         return;
@@ -115,20 +95,18 @@ void process_request_get_header(struct SessionRunParams * session_params_ptr)
     {
         printf("recv len 5: %ld", len);
         read_buffer[len] = '\0';
-        // printf("read_buffer:\n%s\n", read_buffer);
-        strncat(session_params_ptr->conninfo->recv_buf, read_buffer, buffer_size);
-        // printf("recv_buf_index[%d]:\n%s\n", connSessionInfo->connFd, connSessionInfo->recv_buf);
+        strncat(session_params_ptr->session_info->recv_buf, read_buffer, buffer_size);
 
-        for (index = 0; index < strlen(session_params_ptr->conninfo->recv_buf); index++)
+        for (index = 0; index < strlen(session_params_ptr->session_info->recv_buf); index++)
         {
-            if (session_params_ptr->conninfo->recv_buf[index] == '\r' && session_params_ptr->conninfo->recv_buf[index+1] == '\n' &&
-                session_params_ptr->conninfo->recv_buf[index+2] == '\r' && session_params_ptr->conninfo->recv_buf[index+3] == '\n')
+            if (session_params_ptr->session_info->recv_buf[index] == '\r' && session_params_ptr->session_info->recv_buf[index+1] == '\n' &&
+                session_params_ptr->session_info->recv_buf[index+2] == '\r' && session_params_ptr->session_info->recv_buf[index+3] == '\n')
             {
-                memcpy(session_params_ptr->conninfo->header_buf, session_params_ptr->conninfo->recv_buf, index + 4);
-                session_params_ptr->conninfo->header_buf[index + 4] = '\0';
+                memcpy(session_params_ptr->session_info->header_buf, session_params_ptr->session_info->recv_buf, index + 4);
+                session_params_ptr->session_info->header_buf[index + 4] = '\0';
                 // 清空接受的数据，粗暴的丢弃后面接收的数据
-                memset(session_params_ptr->conninfo->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE);
-                session_params_ptr->conninfo->sessionStatus = SESSION_RESPONSE_HEADER;
+                memset(session_params_ptr->session_info->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE);
+                session_params_ptr->session_info->sessionStatus = SESSION_RESPONSE_HEADER;
                 break;
             }
 
@@ -161,44 +139,34 @@ void get_host_var_by_header(struct SessionRunParams * session_params_ptr,
 }
 
 
-
-void get_client_ip(struct SessionRunParams * session_params_ptr)
-{
-    char cli_addr_buff[INET_ADDRSTRLEN];
-    strncpy(session_params_ptr->accessLog.client_ip,
-            inet_ntop(AF_INET, &session_params_ptr->client_sockaddr->sin_addr, cli_addr_buff, INET_ADDRSTRLEN),
-            16);
-}
-
-
 void get_access_log(struct SessionRunParams * session_params_ptr)
 {
     char response_bytes[16];
     char * log_msg_ptr;
-    log_msg_ptr = session_params_ptr->accessLog.log_msg;
+    log_msg_ptr = session_params_ptr->conn_info.log_msg;
     char status[4];
 
-    snprintf(response_bytes, 16, "%lld", session_params_ptr->accessLog.response_bytes);
-    snprintf(status, 4, "%d", session_params_ptr->conninfo->hd_response.status);
+    snprintf(response_bytes, 16, "%lld", session_params_ptr->session_info->response_bytes);
+    snprintf(status, 4, "%d", session_params_ptr->session_info->hd_response.status);
 
     if ( (
-            strlen(session_params_ptr->conninfo->hd_request.user_agent) +
-            strlen(session_params_ptr->accessLog.client_ip) +
+            strlen(session_params_ptr->session_info->hd_request.user_agent) +
+            strlen(session_params_ptr->conn_info.client_ip) +
             strlen(response_bytes) + 2
             ) > 4096
             )
-        strncpy(session_params_ptr->accessLog.log_msg, "log too long", 4096);
+        strncpy(session_params_ptr->conn_info.log_msg, "log too long", 4096);
     else
     {
-        strncpy(log_msg_ptr, session_params_ptr->accessLog.client_ip, 4096);
+        strncpy(log_msg_ptr, session_params_ptr->conn_info.client_ip, 4096);
         strcat(log_msg_ptr, LOG_SPLIT_STR);
 
-        strncat(log_msg_ptr, session_params_ptr->conninfo->hd_request.uri,
-                strlen(session_params_ptr->conninfo->hd_request.uri) );
+        strncat(log_msg_ptr, session_params_ptr->session_info->hd_request.uri,
+                strlen(session_params_ptr->session_info->hd_request.uri) );
         strcat(log_msg_ptr, LOG_SPLIT_STR);
 
-        strncat(log_msg_ptr, session_params_ptr->conninfo->hd_request.user_agent,
-                strlen(session_params_ptr->conninfo->hd_request.user_agent) );
+        strncat(log_msg_ptr, session_params_ptr->session_info->hd_request.user_agent,
+                strlen(session_params_ptr->session_info->hd_request.user_agent) );
         strcat(log_msg_ptr, LOG_SPLIT_STR);
 
         strncat(log_msg_ptr, response_bytes, strlen(response_bytes) );
@@ -209,116 +177,42 @@ void get_access_log(struct SessionRunParams * session_params_ptr)
 }
 
 
-void process_request_response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr)
+void response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr)
 {
-    int write_len;
     get_response_header(session_params_ptr, run_params_ptr);
 
-    if (session_params_ptr->conninfo == NULL)
+    if (session_params_ptr->session_info == NULL)
     {
-        printf("func->process_request_response_header: session_params_ptr->conninfo == NULL, now return\n");
+        printf("func->response_header: session_params_ptr->session_info == NULL, now return\n");
         return;
     }
 
+    session_params_ptr->session_info->send_buffer_size = strlen(session_params_ptr->session_info->header_response);
+    session_params_ptr->session_info->send_buffer = session_params_ptr->session_info->header_response;
 
-    // 发送响应头信息
-    if (session_params_ptr->conninfo->is_https)
-        write_len = SSL_write(session_params_ptr->conninfo->ssl, session_params_ptr->conninfo->header_response,
-                strlen(session_params_ptr->conninfo->header_response));
-    else
-        write_len = writen(session_params_ptr->conninfo->connFd, session_params_ptr->conninfo->header_response,
-                strlen(session_params_ptr->conninfo->header_response));
-
-    if (write_len < 0)
+    write_response_data(session_params_ptr);
+    if (session_params_ptr->session_info != NULL)
     {
-        printf("writen header failed, continue\n");
-        // close(run_params_ptr->conninfo->connFd);
-        session_close(session_params_ptr);
+        session_params_ptr->session_info->sessionStatus = SESSION_RESPONSE_BODY;
         return;
     }
-    else
-    {
-        printf("writen header res: %d\n", write_len);
-        session_params_ptr->accessLog.response_bytes = write_len;
-        session_params_ptr->conninfo->sessionStatus = SESSION_RESPONSE_BODY;
-    }
 
 }
-
-void session_fin_transaction(struct connInfo * connSessionInfo);
-void session_fin_transaction(struct connInfo * connSessionInfo)
-{
-    close(connSessionInfo->localFileFd);
-
-    // connSessionInfo->recv_buf = NULL;
-    connSessionInfo->localFileFd = -2;
-    connSessionInfo->sessionStatus = SESSION_READ_HEADER;
-//    connSessionInfo->sessionRShutdown = SESSION_RNSHUTDOWN;
-//    connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
-    connSessionInfo->response_status.is_header_illegal = false;
-    connSessionInfo->response_status.is_method_allowd = true;
-
-    connSessionInfo->upstream_is_fastcgi = false;
-    connSessionInfo->upstream_is_local_http = false;
-    connSessionInfo->upstream_is_proxy_http = false;
-    memset(connSessionInfo->request_file, 0, sizeof(char) * PATH_MAX);
-
-    // connSessionInfo->is_request_file_set = false;
-}
-
-
-
-
-void process_request_fin_response(struct SessionRunParams *session_params_ptr)
-{
-    char log_level_notice[] = LOG_LEVEL_NOTICE;
-
-    // (session_params_ptr->conninfo->connTransactions)++;
-    // printf("session count: %d\n", session_params_ptr->conninfo->connTransactions);
-
-
-    get_access_log(session_params_ptr);
-    write_log(log_level_notice, session_params_ptr->hostvar->log_level_host, session_params_ptr->accessLog.log_msg,
-              session_params_ptr->hostvar->f_host_log);
-
-    if (session_params_ptr->conninfo->sessionRShutdown == SESSION_RSHUTDOWN)
-        // 读取输入时，已经处理recv_buf
-        session_close(session_params_ptr);
-    else
-    {
-        // 已经发送完毕，保持连接，等待下一个事务
-        session_fin_transaction(session_params_ptr->conninfo);
-
-//            session_params_ptr->conninfo->sessionStatus = SESSION_READ_HEADER;
-//            close(session_params_ptr->conninfo->localFileFd);
-//            session_params_ptr->conninfo->localFileFd = -2;
-
-    }
-
-
-}
-
-
 
 
 void write_response_data(struct SessionRunParams *session_params_ptr)
 {
-    ssize_t * read_buffer_size;
+    ssize_t read_buffer_size;
     char * send_buffer;
-    // ssize_t buffer_size;
-
-//    ssize_t buffer_size = 4096, read_buffer_size;
-//    char send_buffer[buffer_size];
     int res_io;
 
-    read_buffer_size = &(session_params_ptr->conninfo->response_data.read_buffer_size);
-    // buffer_size = session_params_ptr->conninfo->response_data.buffer_size;
-    send_buffer = session_params_ptr->conninfo->response_data.send_buffer;
+    read_buffer_size = session_params_ptr->session_info->send_buffer_size;
+    send_buffer = session_params_ptr->session_info->send_buffer;
 
-    if (session_params_ptr->conninfo->is_https)
-        res_io = SSL_write(session_params_ptr->conninfo->ssl, send_buffer, *read_buffer_size);
+    if (session_params_ptr->session_info->is_https)
+        res_io = SSL_write(session_params_ptr->session_info->ssl, send_buffer, read_buffer_size);
     else
-        res_io = writen(session_params_ptr->conninfo->connFd, send_buffer, *read_buffer_size);
+        res_io = writen(session_params_ptr->session_info->connFd, send_buffer, read_buffer_size);
 
     if (res_io  == -1)
     {
@@ -326,50 +220,38 @@ void write_response_data(struct SessionRunParams *session_params_ptr)
         session_close(session_params_ptr);
         return;
     }
-    else if (res_io == *read_buffer_size)
+    else if (res_io == read_buffer_size)
     {
-        session_params_ptr->accessLog.response_bytes += res_io;
+        session_params_ptr->session_info->response_bytes += res_io;
     }
     else
     {
-        session_params_ptr->accessLog.response_bytes += res_io;
-        printf("writen body not full, res: %d read_buffer_size: %ld\n", res_io, *read_buffer_size);
+        session_params_ptr->session_info->response_bytes += res_io;
+        printf("writen body not full, res: %d read_buffer_size: %ld\n", res_io, read_buffer_size);
     }
 }
 
 
-void process_request_response_500(struct SessionRunParams *session_params_ptr)
-{
-    ssize_t * read_buffer_size;
-    char * send_buffer, * send_buffer_500;
-
-    send_buffer = session_params_ptr->conninfo->response_data.send_buffer;
-    send_buffer_500 = session_params_ptr->conninfo->response_data.fallback_500_data_buf;
-    read_buffer_size = &(session_params_ptr->conninfo->response_data.read_buffer_size);
-    *read_buffer_size = strlen(send_buffer_500);
-    memcpy(send_buffer, send_buffer_500, *read_buffer_size);
-
-    write_response_data(session_params_ptr);
-    process_request_fin_response(session_params_ptr);
-}
-
-
-void process_request_response_data(struct SessionRunParams *session_params_ptr)
+void response_data(struct SessionRunParams *session_params_ptr)
 {
     ssize_t * read_buffer_size;
     char * send_buffer;
     ssize_t buffer_size;
     int local_file_fd;
 
-    read_buffer_size = &(session_params_ptr->conninfo->response_data.read_buffer_size);
-    buffer_size = session_params_ptr->conninfo->response_data.buffer_size;
-    send_buffer = session_params_ptr->conninfo->response_data.send_buffer;
-    local_file_fd = session_params_ptr->conninfo->localFileFd;
+    read_buffer_size = &(session_params_ptr->session_info->response_data.read_buffer_size);
+    buffer_size = session_params_ptr->session_info->response_data.buffer_size;
+    send_buffer = session_params_ptr->session_info->response_data.send_buffer;
+    local_file_fd = session_params_ptr->session_info->localFileFd;
 
     if (local_file_fd == -3)
         process_request_response_500(session_params_ptr);
     else if ( (*read_buffer_size = read(local_file_fd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
+    {
+        session_params_ptr->session_info->send_buffer_size = *read_buffer_size;
+        session_params_ptr->session_info->send_buffer = send_buffer;
         write_response_data(session_params_ptr);
+    }
     else if (*read_buffer_size == 0)
         process_request_fin_response(session_params_ptr);
 }
@@ -377,41 +259,41 @@ void process_request_response_data(struct SessionRunParams *session_params_ptr)
 
 void process_request(struct SessionRunParams * session_params_ptr, struct ParamsRun * run_params_ptr)
 {
-    printf("session_status: %d\n", session_params_ptr->conninfo->sessionRcvData);
+    printf("session_status: %d\n", session_params_ptr->session_info->sessionRcvData);
 
-    if (session_params_ptr->conninfo->sessionRcvData == SESSION_RST)
+    if (session_params_ptr->session_info->sessionRcvData == SESSION_RST)
     {
         printf("recv rst event now close session\n");
         session_close(session_params_ptr);
     }
-    else if (session_params_ptr->conninfo->sessionRcvData == SESSION_DATA_READ_READY)
+    else if (session_params_ptr->session_info->sessionRcvData == SESSION_DATA_READ_READY)
     {
-        if (session_params_ptr->conninfo->sessionStatus == SESSION_READ_HEADER)
+        if (session_params_ptr->session_info->sessionStatus == SESSION_READ_HEADER)
         {
-            process_request_get_header(session_params_ptr);
-            if (session_params_ptr->conninfo != NULL && session_params_ptr->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+            read_header(session_params_ptr);
+            if (session_params_ptr->session_info != NULL && session_params_ptr->session_info->sessionStatus == SESSION_RESPONSE_HEADER)
             {
-                run_params_ptr->event.data.fd = session_params_ptr->conninfo->connFd;
+                run_params_ptr->event.data.fd = session_params_ptr->session_info->connFd;
                 run_params_ptr->event.events = EPOLLOUT|EPOLLHUP;
-                event_update(&(run_params_ptr->event), run_params_ptr->epoll_fd, session_params_ptr->conninfo->connFd);
+                event_update(&(run_params_ptr->event), run_params_ptr->epoll_fd, session_params_ptr->session_info->connFd);
             }
         }
     }
-    else if (session_params_ptr->conninfo->sessionRcvData == SESSION_DATA_WRITE_READY)
+    else if (session_params_ptr->session_info->sessionRcvData == SESSION_DATA_WRITE_READY)
     {
-        if (session_params_ptr->conninfo->sessionStatus == SESSION_RESPONSE_BODY)
+        if (session_params_ptr->session_info->sessionStatus == SESSION_RESPONSE_BODY)
         {
-            process_request_response_data(session_params_ptr);
-            if (session_params_ptr->conninfo != NULL && session_params_ptr->conninfo->sessionStatus == SESSION_READ_HEADER)
+            response_data(session_params_ptr);
+            if (session_params_ptr->session_info != NULL && session_params_ptr->session_info->sessionStatus == SESSION_READ_HEADER)
             {
-                run_params_ptr->event.data.fd = session_params_ptr->conninfo->connFd;
+                run_params_ptr->event.data.fd = session_params_ptr->session_info->connFd;
                 run_params_ptr->event.events = EPOLLIN;
-                event_update(&(run_params_ptr->event), run_params_ptr->epoll_fd, session_params_ptr->conninfo->connFd);
+                event_update(&(run_params_ptr->event), run_params_ptr->epoll_fd, session_params_ptr->session_info->connFd);
             }
         }
-        else if (session_params_ptr->conninfo->sessionStatus == SESSION_RESPONSE_HEADER)
+        else if (session_params_ptr->session_info->sessionStatus == SESSION_RESPONSE_HEADER)
         {
-            process_request_response_header(session_params_ptr, run_params_ptr);
+            response_header(session_params_ptr, run_params_ptr);
             // TODO
             // HEAD方法，只发送响应头后，需要继续读取，以后写剩下语句
         }
@@ -569,168 +451,6 @@ void event_update(struct epoll_event * event, int epoll_fd, int fd)
 }
 
 
-void init_session(struct connInfo * connSessionInfo)
-{
-    connSessionInfo->recv_buf = NULL;
-    connSessionInfo->localFileFd = -2;
-    connSessionInfo->sessionStatus = SESSION_READ_HEADER;
-    connSessionInfo->sessionRShutdown = SESSION_RNSHUTDOWN;
-    connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
-    connSessionInfo->response_status.is_header_illegal = false;
-    connSessionInfo->response_status.is_method_allowd = true;
-
-    connSessionInfo->upstream_is_fastcgi = false;
-    connSessionInfo->upstream_is_local_http = false;
-    connSessionInfo->upstream_is_proxy_http = false;
-
-    memset(connSessionInfo->request_file, 0, sizeof(char) * PATH_MAX);
-    connSessionInfo->hd_response.status = 0;
-    connSessionInfo->redirect_count = 0;
-    connSessionInfo->response_data.buffer_size = 4096;
-}
-
-
-void session_close(struct SessionRunParams * session_params_ptr)
-{
-    close(session_params_ptr->conninfo->connFd);
-    printf("closed connFd: %d\n", session_params_ptr->conninfo->connFd);
-    if (session_params_ptr->conninfo->localFileFd > 0)
-    {
-        close(session_params_ptr->conninfo->localFileFd);
-        session_params_ptr->conninfo->localFileFd = -2;
-        printf("closed localFileFd: %d\n", session_params_ptr->conninfo->localFileFd);
-    }
-
-    if (session_params_ptr->conninfo->recv_buf != NULL)
-    {
-        free(session_params_ptr->conninfo->recv_buf);
-        session_params_ptr->conninfo->recv_buf = NULL;
-        printf("have freed run_params->conninfo->recv_buf\n");
-    }
-    if (session_params_ptr->conninfo != NULL)
-    {
-        free(session_params_ptr->conninfo);
-        session_params_ptr->conninfo = NULL;
-        printf("have freed run_params->conninfo\n");
-    }
-}
-
-
-void new_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd)
-{
-    struct connInfo * connSessionInfos;
-
-    memset(&(run_params_ptr->event), 0, sizeof(run_params_ptr->event));
-
-    run_params_ptr->event.data.fd = connfd;
-    run_params_ptr->event.events = EPOLLIN;
-    event_add(&(run_params_ptr->event), run_params_ptr->epoll_fd, connfd);
-
-    connSessionInfos = malloc(sizeof(struct connInfo));
-    init_session(connSessionInfos);
-
-    connSessionInfos->recv_buf = malloc(sizeof(char) * MAX_EPOLL_SIZE);
-    memset(connSessionInfos->recv_buf, 0, sizeof(char) * MAX_EPOLL_SIZE );
-    printf("receive conn:%d\n", connfd);
-
-    connSessionInfos->connFd = connfd;
-    // connSessionInfos->connTransactions = 0;
-    session_params_ptr[connfd].conninfo = connSessionInfos;
-}
-
-
-void new_http_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr)
-{
-    new_session(session_params_ptr, run_params_ptr, connfd);
-
-    session_params_ptr[connfd].conninfo->is_https = false;
-    session_params_ptr[connfd].conninfo->https_ssl_have_conned = false;
-    session_params_ptr[connfd].hostvar = run_params_ptr->hostvar;
-    session_params_ptr[connfd].client_sockaddr = client_sockaddr;
-}
-
-
-void new_https_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr, SSL_CTX * ctx)
-{
-    new_session(session_params_ptr, run_params_ptr, connfd);
-
-    session_params_ptr[connfd].conninfo->is_https = true;
-    session_params_ptr[connfd].conninfo->https_ssl_have_conned = false;
-    session_params_ptr[connfd].hostvar = run_params_ptr->hostvar;
-    session_params_ptr[connfd].client_sockaddr = client_sockaddr;
-
-    printf("run_param[connfd].hostvar: %s %s\n",
-           session_params_ptr[connfd].hostvar->host,
-           session_params_ptr[connfd].hostvar->doc_root);
-
-    SSL * ssl;
-    ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, connfd);
-}
-
-
-int accept_session(int listen_fd, unsigned int * cli_len)
-{
-    int connfd;
-
-    if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, cli_len)) < 0)
-    {
-        // 重启被中断的系统调用accept
-        if (errno == EINTR)
-            connfd = ACCEPT_CONTINUE_FLAG;
-            // accept返回前连接终止, SVR4实现
-        else if (errno == EPROTO)
-            connfd = ACCEPT_CONTINUE_FLAG;
-            // accept返回前连接终止, POSIX实现
-        else if (errno == ECONNABORTED)
-            connfd = ACCEPT_CONTINUE_FLAG;
-        else
-        {
-            printf("accept error!\n");
-            connfd = ACCEPT_CONTINUE_FLAG;
-            // exit(EXIT_FAILURE);
-        }
-
-    }
-
-    return connfd;
-
-}
-
-
-void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd)
-{
-    SSL * ssl;
-    ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, connfd);
-
-    if (SSL_accept(ssl) <= 0)
-    {
-        printf("#2 ssl accept error errno: %d\n", errno);
-        if (session_params_ptr[connfd].conninfo->https_ssl_have_conned)
-        {
-            printf("run_param[tmpConnFd].https_ssl_have_conned): true\n");
-            printf("tmpConnFd: %d\n", connfd);
-
-        }
-        else
-        {
-            printf("run_param[tmpConnFd].https_ssl_have_conned): false\n");
-            printf("tmpConnFd: %d\n", connfd);
-        }
-
-        close(connfd);
-    }
-    else
-    {
-        printf("ssl established %d\n", connfd);
-        session_params_ptr[connfd].conninfo->https_ssl_have_conned = true;
-        session_params_ptr[connfd].conninfo->ssl = ssl;
-    }
-}
-
-
-
 void handle_session(void)
 {
     int ep_fd_ready_count, ep_fd_index, connfd, tmpConnFd, cli_len;
@@ -780,17 +500,17 @@ void handle_session(void)
                 {
                     printf("debug recv EPOLLIN\n");
                     // https访问ssl未建立连接
-                    if (session_run_param[tmpConnFd].conninfo->is_https &&
-                        (! session_run_param[tmpConnFd].conninfo->https_ssl_have_conned)
+                    if (session_run_param[tmpConnFd].session_info->is_https &&
+                        (! session_run_param[tmpConnFd].session_info->https_ssl_have_conned)
                             )
                     {
                         new_ssl_session(session_run_param, tmpConnFd);
                     }
                     else
                     {
-                        if (session_run_param[tmpConnFd].conninfo->sessionStatus == SESSION_READ_HEADER)
+                        if (session_run_param[tmpConnFd].session_info->sessionStatus == SESSION_READ_HEADER)
                         {
-                            session_run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_READ_READY;
+                            session_run_param[tmpConnFd].session_info->sessionRcvData = SESSION_DATA_READ_READY;
                             process_request(&(session_run_param[tmpConnFd]), &run_params);
                         }
                     }
@@ -800,9 +520,9 @@ void handle_session(void)
                 if (tmpEvent & EPOLLHUP)
                 {
                     printf("debug recv EPOLLHUP\n");
-                    if (session_run_param[tmpConnFd].conninfo == NULL)
+                    if (session_run_param[tmpConnFd].session_info == NULL)
                         continue;
-                    session_run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_RST;
+                    session_run_param[tmpConnFd].session_info->sessionRcvData = SESSION_RST;
                     process_request(&(session_run_param[tmpConnFd]), &run_params);
                 }
 
@@ -811,12 +531,12 @@ void handle_session(void)
                 {
                     printf("debug recv EPOLLOUT\n");
                     // TODO 连接已经释放，临时处理这种情况
-                    if (session_run_param[tmpConnFd].conninfo == NULL)
+                    if (session_run_param[tmpConnFd].session_info == NULL)
                         continue;
-                    if (session_run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE_HEADER ||
-                        session_run_param[tmpConnFd].conninfo->sessionStatus == SESSION_RESPONSE_BODY)
+                    if (session_run_param[tmpConnFd].session_info->sessionStatus == SESSION_RESPONSE_HEADER ||
+                        session_run_param[tmpConnFd].session_info->sessionStatus == SESSION_RESPONSE_BODY)
                     {
-                        session_run_param[tmpConnFd].conninfo->sessionRcvData = SESSION_DATA_WRITE_READY;
+                        session_run_param[tmpConnFd].session_info->sessionRcvData = SESSION_DATA_WRITE_READY;
                         process_request(&(session_run_param[tmpConnFd]), &run_params);
                     }
                 }
@@ -893,12 +613,6 @@ void test_module(int argc, char ** argv)
 
     str_lstrip_str(ch, ch_ptr);
     printf("%s\n", ch);
-
-//    get_header_value_by_key2(ch, ch_ptr, value);
-//
-//    printf("after str_lstrip_str:\n%s\n", value);
-
-
 
     exit(EXIT_SUCCESS);
 

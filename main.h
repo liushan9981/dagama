@@ -103,7 +103,7 @@ struct ResponseStatus {
 };
 
 
-struct connInfo {
+struct sessionInfo {
     // int                    connTransactions;
     int                    connFd;
     int                    localFileFd;
@@ -125,7 +125,10 @@ struct connInfo {
     bool                   upstream_is_proxy_http;
     bool                   https_ssl_have_conned;
     ResponseData           response_data;
+    long long              response_bytes;
     SSL *                  ssl;
+    ssize_t                send_buffer_size;
+    char *                 send_buffer;
 };
 
 
@@ -170,19 +173,18 @@ struct ParamsRun {
     struct epoll_event event;
 };
 
-typedef struct AccessLog {
-    char client_ip[16];
-    long long response_bytes;
-    char user_agent[4096];
-    int http_status;
+typedef struct ConnInfo {
+    char client_ip[INET_ADDRSTRLEN];
+//    char user_agent[4096];
+//    int http_status;
     char log_msg[4096];
-} AccessLog;
+} ConnInfo;
 
 struct SessionRunParams {
-    struct connInfo * conninfo;
+    struct sessionInfo * session_info;
     struct sockaddr_in * client_sockaddr;
     struct hostVar * hostvar;
-    AccessLog accessLog;
+    ConnInfo conn_info;
 };
 
 
@@ -207,36 +209,20 @@ void configure_context_ssl(SSL_CTX * ctx);
 void event_add(struct epoll_event * event, int epoll_fd, int fd);
 void event_update(struct epoll_event * event, int epoll_fd, int fd);
 
-// session
-int accept_session(int listen_fd, unsigned int * cli_len);
-void new_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd);
-void new_http_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr);
-void new_https_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr, SSL_CTX * ctx);
-void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd);
-
-
-
-void session_close(struct SessionRunParams *session_params_ptr);
 void get_config_file_path(int argc, char ** argv);
-
 void process_request(struct SessionRunParams *, struct ParamsRun *);
 
 // header
 void get_host_var_by_header(struct SessionRunParams * session_params_ptr,
         const struct request_header * header_request_ptr, struct ParamsRun *);
-void process_request_get_header(struct SessionRunParams *session_params_ptr);
+void read_header(struct SessionRunParams *session_params_ptr);
 void get_response_header(struct SessionRunParams * session_params_ptr, struct ParamsRun *);
-void process_request_response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun *);
+void response_header(struct SessionRunParams *session_params_ptr, struct ParamsRun *);
 
-void process_request_response_data(struct SessionRunParams *session_params_ptr);
-void process_request_fin_response(struct SessionRunParams *session_params_ptr);
-void process_request_response_500(struct SessionRunParams *session_params_ptr);
+void response_data(struct SessionRunParams *session_params_ptr);
 void write_response_data(struct SessionRunParams *session_params_ptr);
-void pr_client_info(struct SessionRunParams *session_params_ptr);
 
 
-void parse_header_request(struct SessionRunParams * session_params_ptr);
-void init_session(struct connInfo * connSessionInfo);
 int create_listen_sock(int port, struct sockaddr_in * server_sockaddr);
 void test_module(int argc, char ** argv);
 
@@ -247,6 +233,7 @@ void handle_session(void);
 
 void get_access_log(struct SessionRunParams * session_params_ptr);
 void get_client_ip(struct SessionRunParams * session_params_ptr);
+
 
 static void sig_pipe(int signo);
 #endif //DAGAMA_MAIN_H
