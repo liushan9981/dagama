@@ -332,15 +332,21 @@ void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar * h
 }
 
 
+
+
 void init_config(struct hostVar * host_var_ptr, char * config_f_path)
 {
     struct config_all_host_kv all_host_kv;
+
 
     strncpy(all_host_kv.config_file_path, config_f_path, PATH_MAX);
     all_host_kv.host_num = get_config_host_num(config_f_path);
     all_host_kv.host_config_kv = (struct config_host_kv *) malloc(sizeof(struct config_host_kv) * all_host_kv.host_num);
     get_all_host_config(&all_host_kv);
     set_host_config(&all_host_kv, host_var_ptr);
+
+
+    // exit(EXIT_SUCCESS);
 
     // 调试用，打印出来所有配置的值
 //    int index, index2;

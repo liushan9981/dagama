@@ -31,6 +31,14 @@
 
 
 
+static int http_listen_fd, https_listen_fd;
+static struct SessionRunParams session_run_param[MAX_EPOLL_SIZE];
+struct ParamsRun run_params;
+SSL_CTX * ctx;
+static char config_file_path[PATH_MAX] = "../conf/dagama.conf";
+static struct sockaddr_in http_server_sockaddr, https_server_sockaddr;
+struct sockaddr_in client_sockaddr;
+
 
 void read_header(struct SessionRunParams *session_params_ptr)
 {
@@ -246,14 +254,24 @@ void response_data(struct SessionRunParams *session_params_ptr)
 
     if (local_file_fd == -3)
         process_request_response_500(session_params_ptr);
-    else if ( (*read_buffer_size = read(local_file_fd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
+    else if (lseek(local_file_fd, session_params_ptr->session_info->localFdPos, SEEK_SET) != -1)
     {
-        session_params_ptr->session_info->send_buffer_size = *read_buffer_size;
-        session_params_ptr->session_info->send_buffer = send_buffer;
-        write_response_data(session_params_ptr);
+        if ( (*read_buffer_size = read(local_file_fd, send_buffer, buffer_size - (ssize_t)1) ) > 0)
+        {
+            session_params_ptr->session_info->send_buffer_size = *read_buffer_size;
+            session_params_ptr->session_info->send_buffer = send_buffer;
+            session_params_ptr->session_info->localFdPos += (*read_buffer_size);
+            write_response_data(session_params_ptr);
+        }
+        else if (*read_buffer_size == 0)
+            process_request_fin_response(session_params_ptr);
     }
-    else if (*read_buffer_size == 0)
-        process_request_fin_response(session_params_ptr);
+    else
+    {
+        fprintf(stderr, "lseek error\n");
+        session_close(session_params_ptr);
+    }
+
 }
 
 
@@ -565,16 +583,42 @@ void install_signal(void)
     // TODO term信号
 }
 
+void init_request_file_open_book(struct RequestFileOpenBook * request_file_open_book_ptr);
 
+void init_request_file_open_book(struct RequestFileOpenBook * request_file_open_book_ptr)
+{
+    int index;
+
+    for (index = 0; index < MAX_EPOLL_SIZE; index++)
+    {
+        request_file_open_book_ptr[index].fd = -1;
+        request_file_open_book_ptr[index].file_size = -1;
+        request_file_open_book_ptr[index].reference_count = 0;
+        request_file_open_book_ptr[index].myerrno = 0;
+    }
+
+
+}
 
 void get_run_params(int argc, char ** argv)
 {
     get_config_file_path(argc, argv);
     printf("config file path: %s\n", config_file_path);
 
+
     run_params.host_count = get_config_host_num(config_file_path);
     run_params.hostvar = malloc(sizeof(struct hostVar) * run_params.host_count);
     init_config(run_params.hostvar, config_file_path);
+
+    init_request_file_open_book(run_params.request_file_open_book);
+
+    int index;
+
+    for (index = 0; index < 3; index++)
+    {
+        printf("debug %d: %d\n", index, run_params.request_file_open_book[index].fd);
+    }
+
 }
 
 
@@ -606,13 +650,7 @@ void start_listen(void)
 
 void test_module(int argc, char ** argv)
 {
-    char ch[] = "Host: www.baidu.com\r\n";
-    char * ch_ptr = "Host";
-    char value[1024];
-
-
-    str_lstrip_str(ch, ch_ptr);
-    printf("%s\n", ch);
+    printf("this is %d\n", FOPEN_MAX);
 
     exit(EXIT_SUCCESS);
 
@@ -626,6 +664,12 @@ int main(int argc, char ** argv) {
     get_run_params(argc, argv);
     start_listen();
     // 循环处理会话
+    int index;
+
+    for (index = 0; index < 3; index++)
+    {
+        printf("debug in main() %d: %d\n", index, run_params.request_file_open_book[index].fd);
+    }
     handle_session();
 }
 

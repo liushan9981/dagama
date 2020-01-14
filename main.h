@@ -107,6 +107,7 @@ struct sessionInfo {
     // int                    connTransactions;
     int                    connFd;
     int                    localFileFd;
+    off_t                  localFdPos;
     char *                 recv_buf;
     char                   header_buf[MAX_HEADER_RESPONSE_SIZE];
     char                   header_response[MAX_HEADER_RESPONSE_SIZE];
@@ -135,16 +136,18 @@ struct sessionInfo {
 static char * response_500_msg = "ops! Server 500 Error!";
 
 
-
-//typedef struct FileOpenBook {
-//    char file_path[PATH_MAX];
-//    FILE * f;
-//} FileOpenBook;
-
-
 struct FileOpenBook {
         char file_path[PATH_MAX];
         FILE * f;
+};
+
+
+struct RequestFileOpenBook {
+    char file_path[PATH_MAX];
+    int fd;
+    unsigned long long file_size;
+    int reference_count;
+    int myerrno;
 };
 
 
@@ -165,12 +168,12 @@ struct hostVar {
 };
 
 
-
 struct ParamsRun {
     int host_count;
     struct hostVar * hostvar;
     int epoll_fd;
     struct epoll_event event;
+    struct RequestFileOpenBook request_file_open_book[MAX_EPOLL_SIZE];
 };
 
 typedef struct ConnInfo {
@@ -189,13 +192,7 @@ struct SessionRunParams {
 
 
 
-static int http_listen_fd, https_listen_fd;
-static struct SessionRunParams session_run_param[MAX_EPOLL_SIZE];
-static struct ParamsRun run_params;
-static SSL_CTX * ctx;
-static char config_file_path[PATH_MAX] = "../conf/dagama.conf";
-static struct sockaddr_in http_server_sockaddr, https_server_sockaddr;
-static struct sockaddr_in client_sockaddr;
+
 
 
 

@@ -3,6 +3,7 @@
 //
 
 #include "session.h"
+#include "response_header.h"
 
 #include <unistd.h>
 
@@ -11,6 +12,9 @@ void init_session(struct sessionInfo * connSessionInfo)
 {
     connSessionInfo->recv_buf = NULL;
     connSessionInfo->localFileFd = -2;
+    // TODO
+    // 改为开始位置
+    connSessionInfo->localFdPos = 0;
     connSessionInfo->sessionStatus = SESSION_READ_HEADER;
     connSessionInfo->sessionRShutdown = SESSION_RNSHUTDOWN;
     connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
@@ -31,8 +35,11 @@ void init_session(struct sessionInfo * connSessionInfo)
 
 void session_fin_transaction(struct sessionInfo * connSessionInfo)
 {
-    close(connSessionInfo->localFileFd);
+    // TODO 关闭引用
+    close_local_fd(connSessionInfo);
+
     connSessionInfo->localFileFd = -2;
+    connSessionInfo->localFdPos = 0;
     connSessionInfo->sessionStatus = SESSION_READ_HEADER;
     connSessionInfo->response_status.is_header_illegal = false;
     connSessionInfo->response_status.is_method_allowd = true;
@@ -53,9 +60,9 @@ void session_close(struct SessionRunParams * session_params_ptr)
     printf("closed connFd: %d\n", session_params_ptr->session_info->connFd);
     if (session_params_ptr->session_info->localFileFd > 0)
     {
-        close(session_params_ptr->session_info->localFileFd);
+        // TODO 关闭引用
+        close_local_fd(session_params_ptr->session_info);
         session_params_ptr->session_info->localFileFd = -2;
-        printf("closed localFileFd: %d\n", session_params_ptr->session_info->localFileFd);
     }
 
     if (session_params_ptr->session_info->recv_buf != NULL)
@@ -128,6 +135,7 @@ void new_https_session(struct SessionRunParams *session_params_ptr, struct Param
 int accept_session(int listen_fd, unsigned int * cli_len)
 {
     int connfd;
+    extern struct sockaddr_in client_sockaddr;
 
     if ( (connfd = accept(listen_fd, (struct sockaddr *) &client_sockaddr, cli_len)) < 0)
     {
@@ -157,6 +165,8 @@ int accept_session(int listen_fd, unsigned int * cli_len)
 void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd)
 {
     SSL * ssl;
+    extern SSL_CTX * ctx;
+
     ssl = SSL_new(ctx);
     SSL_set_fd(ssl, connfd);
 
