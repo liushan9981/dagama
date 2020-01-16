@@ -13,6 +13,8 @@
 #include "mystring.h"
 
 
+extern struct ParamsRun run_params;
+
 
 bool get_value_by_key(struct config_key_value * config_kv_ptr, char * * ch, int num)
 {
@@ -333,6 +335,24 @@ void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar * h
 
 
 
+void init_request_file_open_book(void)
+{
+    int index;
+    struct RequestFileOpenBook * request_file_open_book_ptr;
+
+    request_file_open_book_ptr = run_params.request_file_open_book;
+
+    for (index = 0; index < MAX_EPOLL_SIZE; index++)
+    {
+        request_file_open_book_ptr[index].fd = -1;
+        request_file_open_book_ptr[index].file_size = -1;
+        request_file_open_book_ptr[index].reference_count = 0;
+        request_file_open_book_ptr[index].myerrno = 0;
+    }
+
+
+}
+
 
 void init_config(struct hostVar * host_var_ptr, char * config_f_path)
 {
@@ -344,6 +364,14 @@ void init_config(struct hostVar * host_var_ptr, char * config_f_path)
     all_host_kv.host_config_kv = (struct config_host_kv *) malloc(sizeof(struct config_host_kv) * all_host_kv.host_num);
     get_all_host_config(&all_host_kv);
     set_host_config(&all_host_kv, host_var_ptr);
+    init_request_file_open_book();
+
+    int index;
+
+    for (index = 0; index < 3; index++)
+    {
+        printf("debug %d: %d\n", index, run_params.request_file_open_book[index].fd);
+    }
 
 
     // exit(EXIT_SUCCESS);

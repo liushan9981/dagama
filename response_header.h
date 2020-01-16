@@ -21,6 +21,9 @@ bool get_index_file(struct SessionRunParams * session_params_ptr);
 bool check_file_path_accessible(char * file_path);
 void parse_header_request(struct SessionRunParams * session_params_ptr);
 bool is_response_status_set(struct SessionRunParams * session_params_ptr);
-int get_fd_or_open_file(struct SessionRunParams * session_params_ptr, struct ParamsRun * run_params_ptr);
-void close_local_fd(struct sessionInfo * connSessionInfo);
+
+int getOrNewReqFd(struct SessionRunParams *session_params_ptr, struct ParamsRun *run_params_ptr);
+void closeReqFd(struct sessionInfo *connSessionInfo);
+
+
 #endif //DAGAMA_RESPONSE_HEADER_H

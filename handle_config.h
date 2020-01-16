@@ -118,6 +118,8 @@ void set_host_config(struct config_all_host_kv * all_host_kv, struct hostVar *);
 
 void get_or_open_file(struct FileOpenBook  * file_open_book, const char * file_path, FILE ** f);
 void init_open_file_book(struct FileOpenBook  * file_open_book);
+void init_request_file_open_book(void);
+
 
 void test_hehe(void);
 #endif //DAGAMA_HANDLE_CONFIG_H

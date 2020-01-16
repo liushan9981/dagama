@@ -133,9 +133,6 @@ struct sessionInfo {
 };
 
 
-static char * response_500_msg = "ops! Server 500 Error!";
-
-
 struct FileOpenBook {
         char file_path[PATH_MAX];
         FILE * f;

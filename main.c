@@ -30,14 +30,15 @@
 #include "session.h"
 
 
-
-static int http_listen_fd, https_listen_fd;
-static struct SessionRunParams session_run_param[MAX_EPOLL_SIZE];
 struct ParamsRun run_params;
 SSL_CTX * ctx;
+struct sockaddr_in client_sockaddr;
+char * response_500_msg = "ops! Server 500 Error!";
+
 static char config_file_path[PATH_MAX] = "../conf/dagama.conf";
 static struct sockaddr_in http_server_sockaddr, https_server_sockaddr;
-struct sockaddr_in client_sockaddr;
+static int http_listen_fd, https_listen_fd;
+static struct SessionRunParams session_run_param[MAX_EPOLL_SIZE];
 
 
 void read_header(struct SessionRunParams *session_params_ptr)
@@ -277,7 +278,7 @@ void response_data(struct SessionRunParams *session_params_ptr)
 
 void process_request(struct SessionRunParams * session_params_ptr, struct ParamsRun * run_params_ptr)
 {
-    printf("session_status: %d\n", session_params_ptr->session_info->sessionRcvData);
+    // printf("session_status: %d\n", session_params_ptr->session_info->sessionRcvData);
 
     if (session_params_ptr->session_info->sessionRcvData == SESSION_RST)
     {
@@ -502,7 +503,7 @@ void handle_session(void)
             {
                 if (tmpEvent & EPOLLIN)
                 {
-                    printf("EVENT: https ready accept: %d\n", tmpConnFd);
+                    // printf("EVENT: https ready accept: %d\n", tmpConnFd);
                     // 收到连接请求
                     if ( (connfd = accept_session(https_listen_fd, &cli_len)) < 0)
                         continue;
@@ -512,11 +513,11 @@ void handle_session(void)
             }
             else if (tmpConnFd >= 5)
             {
-                printf("recv data >= 5:\n");
+                // printf("recv data >= 5:\n");
                 // 有数据到达，可以读
                 if (tmpEvent & EPOLLIN)
                 {
-                    printf("debug recv EPOLLIN\n");
+                    // printf("debug recv EPOLLIN\n");
                     // https访问ssl未建立连接
                     if (session_run_param[tmpConnFd].session_info->is_https &&
                         (! session_run_param[tmpConnFd].session_info->https_ssl_have_conned)
@@ -547,7 +548,7 @@ void handle_session(void)
                 // 可以写
                 if (tmpEvent & EPOLLOUT)
                 {
-                    printf("debug recv EPOLLOUT\n");
+                    // printf("debug recv EPOLLOUT\n");
                     // TODO 连接已经释放，临时处理这种情况
                     if (session_run_param[tmpConnFd].session_info == NULL)
                         continue;
@@ -583,41 +584,16 @@ void install_signal(void)
     // TODO term信号
 }
 
-void init_request_file_open_book(struct RequestFileOpenBook * request_file_open_book_ptr);
 
-void init_request_file_open_book(struct RequestFileOpenBook * request_file_open_book_ptr)
-{
-    int index;
-
-    for (index = 0; index < MAX_EPOLL_SIZE; index++)
-    {
-        request_file_open_book_ptr[index].fd = -1;
-        request_file_open_book_ptr[index].file_size = -1;
-        request_file_open_book_ptr[index].reference_count = 0;
-        request_file_open_book_ptr[index].myerrno = 0;
-    }
-
-
-}
 
 void get_run_params(int argc, char ** argv)
 {
     get_config_file_path(argc, argv);
     printf("config file path: %s\n", config_file_path);
 
-
     run_params.host_count = get_config_host_num(config_file_path);
     run_params.hostvar = malloc(sizeof(struct hostVar) * run_params.host_count);
     init_config(run_params.hostvar, config_file_path);
-
-    init_request_file_open_book(run_params.request_file_open_book);
-
-    int index;
-
-    for (index = 0; index < 3; index++)
-    {
-        printf("debug %d: %d\n", index, run_params.request_file_open_book[index].fd);
-    }
 
 }
 

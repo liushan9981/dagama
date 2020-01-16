@@ -13,8 +13,9 @@
 #include "process_request_fastcgi.h"
 #include <fcntl.h>
 
-extern struct ParamsRun run_params;
 
+extern struct ParamsRun run_params;
+extern char * response_500_msg;
 
 
 void parse_header_request(struct SessionRunParams * session_params_ptr)
@@ -212,43 +213,8 @@ bool is_response_status_set(struct SessionRunParams * session_params_ptr)
 }
 
 
-void close_local_fd(struct sessionInfo * connSessionInfo)
-{
-    int index;
-    char * request_file;
-    struct RequestFileOpenBook * request_file_open_book_ptr = NULL;
 
-
-    request_file = connSessionInfo->request_file;
-
-    for (index = 0; index < MAX_EPOLL_SIZE; index++)
-        if (strcmp(request_file, run_params.request_file_open_book[index].file_path) == 0)
-        {
-            request_file_open_book_ptr = &(run_params.request_file_open_book[index]);
-            (request_file_open_book_ptr->reference_count)--;
-            printf("debug from close_local_fd filepath %s ref count is %d\n",
-                    request_file_open_book_ptr->file_path,
-                    request_file_open_book_ptr->reference_count);
-            break;
-        }
-
-    if (request_file_open_book_ptr == NULL)
-        return;
-    else if (request_file_open_book_ptr->reference_count <= 0)
-    {
-        printf("debug: from close_local_fd() now close fd: %d\n", request_file_open_book_ptr->fd);
-        close(request_file_open_book_ptr->fd);
-        request_file_open_book_ptr->fd = -1;
-        request_file_open_book_ptr->file_size = -1;
-        request_file_open_book_ptr->reference_count = 0;
-        request_file_open_book_ptr->myerrno = 0;
-        request_file_open_book_ptr->file_path[0] = '\0';
-    }
-
-}
-
-
-int get_fd_or_open_file(struct SessionRunParams * session_params_ptr, struct ParamsRun * run_params_ptr)
+int getOrNewReqFd(struct SessionRunParams *session_params_ptr, struct ParamsRun *run_params_ptr)
 {
     char * request_file;
     int index;
@@ -277,46 +243,67 @@ int get_fd_or_open_file(struct SessionRunParams * session_params_ptr, struct Par
             return 0;
         }
 
-    printf("1111\n");
     if ( (*localFileFd = open(request_file, O_RDONLY) ) > 0 && stat(request_file, &statbuf) != -1)
         flag = true;
 
-    printf("2222\n");
     for (index = 0; index < MAX_EPOLL_SIZE; index++)
-    {
-        if (index < 3)
-            printf("fd %d ## %d\n", index, run_params_ptr->request_file_open_book[index].fd);
-
         if (run_params_ptr->request_file_open_book[index].fd == -1)
         {
-            printf("33333\n");
             request_file_open_book_ptr = &(run_params_ptr->request_file_open_book[index]);
             memcpy(request_file_open_book_ptr->file_path, request_file, strlen(request_file) + 1);
             if (flag)
             {
                 request_file_open_book_ptr->fd = *localFileFd;
                 *content_length = request_file_open_book_ptr->file_size = statbuf.st_size;
-                printf("debug: content_lenth: %lld  %lld  %lld\n",
-                       *content_length,
-                       request_file_open_book_ptr->file_size,
-                       statbuf.st_size);
-
                 request_file_open_book_ptr->reference_count++;
                 request_file_open_book_ptr->myerrno = 0;
                 return request_file_open_book_ptr->myerrno;
             }
             else
             {
-                printf("debug2: open file error\n");
-
                 request_file_open_book_ptr->myerrno = errno;
                 return request_file_open_book_ptr->myerrno;
             }
 
         }
-    }
 
     return 0;
+}
+
+
+void closeReqFd(struct sessionInfo *connSessionInfo)
+{
+    int index;
+    char * request_file;
+    struct RequestFileOpenBook * request_file_open_book_ptr = NULL;
+
+
+    request_file = connSessionInfo->request_file;
+
+    for (index = 0; index < MAX_EPOLL_SIZE; index++)
+        if (strcmp(request_file, run_params.request_file_open_book[index].file_path) == 0)
+        {
+            request_file_open_book_ptr = &(run_params.request_file_open_book[index]);
+            (request_file_open_book_ptr->reference_count)--;
+            printf("debug from close_local_fd filepath %s ref count is %d\n",
+                   request_file_open_book_ptr->file_path,
+                   request_file_open_book_ptr->reference_count);
+            break;
+        }
+
+    if (request_file_open_book_ptr == NULL)
+        return;
+    else if (request_file_open_book_ptr->reference_count <= 0)
+    {
+        printf("debug: from close_local_fd() now close fd: %d\n", request_file_open_book_ptr->fd);
+        close(request_file_open_book_ptr->fd);
+        request_file_open_book_ptr->fd = -1;
+        request_file_open_book_ptr->file_size = -1;
+        request_file_open_book_ptr->reference_count = 0;
+        request_file_open_book_ptr->myerrno = 0;
+        request_file_open_book_ptr->file_path[0] = '\0';
+    }
+
 }
 
 
@@ -325,7 +312,6 @@ void open_request_file(struct SessionRunParams * session_params_ptr, struct Para
     char * request_file;
     struct response_header * header_resonse;
     int * redirect_count;
-    struct stat statbuf;
     int myerrno;
 
     request_file = session_params_ptr->session_info->request_file;
@@ -342,8 +328,7 @@ void open_request_file(struct SessionRunParams * session_params_ptr, struct Para
         return;
     }
 
-    myerrno = get_fd_or_open_file(session_params_ptr, run_params_ptr);
-
+    myerrno = getOrNewReqFd(session_params_ptr, run_params_ptr);
     printf("mydebug myerrno: %d\n", myerrno);
 
     if (session_params_ptr->session_info->localFileFd > 0
@@ -353,7 +338,6 @@ void open_request_file(struct SessionRunParams * session_params_ptr, struct Para
         {
             SET_RESPONSE_STATUS_200(header_resonse);
         }
-        // header_resonse->content_length = statbuf.st_size;
     }
     else
     {
@@ -375,38 +359,6 @@ void open_request_file(struct SessionRunParams * session_params_ptr, struct Para
             strcpy(request_file, session_params_ptr->hostvar->request_file_404);
         }
     }
-
-
-
-//    if ( (session_params_ptr->session_info->localFileFd = open(request_file, O_RDONLY)) > 0 &&
-//    stat(request_file, &statbuf) != -1)
-//    {
-//        if (header_resonse->status == 0)
-//        {
-//            SET_RESPONSE_STATUS_200(header_resonse);
-//        }
-//        header_resonse->content_length = statbuf.st_size;
-//    }
-//    else
-//    {
-//        (*redirect_count)++;
-//
-//        if (is_response_status_set(session_params_ptr) )
-//            return;
-//
-//        if (errno == EACCES)
-//        {
-//            fprintf(stderr, "open file %s %s\n", request_file, strerror(EACCES) );
-//            SET_RESPONSE_STATUS_403(header_resonse);
-//            strcpy(request_file, session_params_ptr->hostvar->request_file_403);
-//        }
-//        else if (errno == ENOENT)
-//        {
-//            fprintf(stderr, "open file %s %s\n", request_file, strerror(ENOENT) );
-//            SET_RESPONSE_STATUS_404(header_resonse);
-//            strcpy(request_file, session_params_ptr->hostvar->request_file_404);
-//        }
-//    }
 
 }
 

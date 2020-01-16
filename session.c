@@ -8,13 +8,15 @@
 #include <unistd.h>
 
 
+void init_localFileFd(struct sessionInfo * connSessionInfo)
+{
+    connSessionInfo->localFileFd = -2;
+    connSessionInfo->localFdPos = 0;
+}
+
 void init_session(struct sessionInfo * connSessionInfo)
 {
     connSessionInfo->recv_buf = NULL;
-    connSessionInfo->localFileFd = -2;
-    // TODO
-    // 改为开始位置
-    connSessionInfo->localFdPos = 0;
     connSessionInfo->sessionStatus = SESSION_READ_HEADER;
     connSessionInfo->sessionRShutdown = SESSION_RNSHUTDOWN;
     connSessionInfo->sessionRcvData = SESSION_DATA_HANDLED;
@@ -31,15 +33,14 @@ void init_session(struct sessionInfo * connSessionInfo)
     connSessionInfo->response_data.buffer_size = 4096;
     connSessionInfo->response_bytes = 0;
     memset(connSessionInfo->header_buf, 0, (size_t) MAX_HEADER_RESPONSE_SIZE);
+
+    init_localFileFd(connSessionInfo);
 }
 
 void session_fin_transaction(struct sessionInfo * connSessionInfo)
 {
-    // TODO 关闭引用
-    close_local_fd(connSessionInfo);
+    closeReqFd(connSessionInfo);
 
-    connSessionInfo->localFileFd = -2;
-    connSessionInfo->localFdPos = 0;
     connSessionInfo->sessionStatus = SESSION_READ_HEADER;
     connSessionInfo->response_status.is_header_illegal = false;
     connSessionInfo->response_status.is_method_allowd = true;
@@ -51,6 +52,8 @@ void session_fin_transaction(struct sessionInfo * connSessionInfo)
     connSessionInfo->redirect_count = 0;
     connSessionInfo->response_bytes = 0;
     memset(connSessionInfo->header_buf, 0, (size_t) MAX_HEADER_RESPONSE_SIZE);
+
+    init_localFileFd(connSessionInfo);
 }
 
 
@@ -60,9 +63,8 @@ void session_close(struct SessionRunParams * session_params_ptr)
     printf("closed connFd: %d\n", session_params_ptr->session_info->connFd);
     if (session_params_ptr->session_info->localFileFd > 0)
     {
-        // TODO 关闭引用
-        close_local_fd(session_params_ptr->session_info);
-        session_params_ptr->session_info->localFileFd = -2;
+        closeReqFd(session_params_ptr->session_info);
+        init_localFileFd(session_params_ptr->session_info);
     }
 
     if (session_params_ptr->session_info->recv_buf != NULL)
@@ -98,7 +100,6 @@ void new_session(struct SessionRunParams *session_params_ptr, struct ParamsRun *
     printf("receive conn:%d\n", connfd);
 
     connSessionInfos->connFd = connfd;
-    // connSessionInfos->connTransactions = 0;
     session_params_ptr[connfd].session_info = connSessionInfos;
 }
 
@@ -122,10 +123,6 @@ void new_https_session(struct SessionRunParams *session_params_ptr, struct Param
     session_params_ptr[connfd].session_info->https_ssl_have_conned = false;
     session_params_ptr[connfd].hostvar = run_params_ptr->hostvar;
     session_params_ptr[connfd].client_sockaddr = client_sockaddr;
-
-    printf("run_param[connfd].hostvar: %s %s\n",
-           session_params_ptr[connfd].hostvar->host,
-           session_params_ptr[connfd].hostvar->doc_root);
 
     SSL * ssl;
     ssl = SSL_new(ctx);

@@ -15,7 +15,7 @@ void new_http_session(struct SessionRunParams *session_params_ptr, struct Params
 void new_https_session(struct SessionRunParams *session_params_ptr, struct ParamsRun * run_params_ptr, int connfd, struct sockaddr_in * client_sockaddr, SSL_CTX * ctx);
 int accept_session(int listen_fd, unsigned int * cli_len);
 void new_ssl_session(struct SessionRunParams * session_params_ptr, int connfd);
-
+void init_localFileFd(struct sessionInfo * connSessionInfo);
 
 
 #endif //DAGAMA_SESSION_H
